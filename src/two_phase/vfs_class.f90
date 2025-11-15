@@ -31,6 +31,8 @@ module vfs_class
    integer, parameter, public :: plicnet=8           !< PLICnet
    integer, parameter, public :: r2pnet=9            !< R2Pnet
    integer, parameter, public :: jibben=10           !< PPIC-Jibben
+   integer, parameter, public :: PUplic=11           !< PPIC-Partition of Unity from PLIC
+   integer, parameter, public :: PUjibben=12         !< PPIC-Partition of Unity from Jibben
    
    ! List of available interface transport schemes for VF
    integer, parameter, public :: flux=1             !< Flux-based geometric transport
@@ -218,6 +220,7 @@ module vfs_class
       procedure :: build_plicnet                          !< PLICnet reconstruction of the interface from VF and bary fields
       procedure :: build_r2pnet                           !< R2Pnet reconstruction of the interface
       procedure :: build_jibben                           !< PPIC-Jibben reconstruction of the interface
+      procedure :: build_PU                               !< PPIC-PU reconstruction of the interface
       procedure :: sense_interface                        !< Calculate various surface sensors
       procedure :: get_thickness                          !< Calculate multiphasic structure thickness
       procedure :: detect_thin_regions                    !< Detect thin regions
@@ -328,7 +331,7 @@ contains
          this%flotsam_thld=1.0e-3_WP  !< This considers any separated structure around dx/10 and below as bogus
          ! Also allow for larger curvatures to be calculated
          this%maxcurv_times_mesh=2.0_WP
-      case (jibben)
+      case (jibben,PUplic,PUjibben)
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
          this%ppic=.true.
@@ -2484,6 +2487,7 @@ contains
       case (plicnet); call this%build_plicnet()
       case (r2pnet) ; call this%build_r2pnet()
       case (jibben) ; call this%build_lvira()
+      case (PUplic,PUjibben) ; call this%build_lvira()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
       ! Follow with interface smoothing
@@ -2497,7 +2501,9 @@ contains
       class(vfs), intent(inout) :: this
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
-      case (jibben) ; call this%build_jibben()
+      case (jibben)   ; call this%build_jibben()
+      case (PUplic)   ; call this%build_PU()
+      case (PUjibben) ; call this%build_jibben(); call this%build_PU()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
       ! Follow with interface smoothing
@@ -3827,6 +3833,100 @@ contains
       call this%sync_interface()
       
    end subroutine build_jibben
+
+   !> Partition of Unity reconstruction of a parabolic interface in mixed cells
+   subroutine build_PU(this)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      type(PUSTNeigh_RectCub_type) :: neighborhood
+      type(RectCub_type) :: cell
+      real(IRL_double), dimension(3) :: centroid
+      real(IRL_double) :: delta
+      type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: oldinterface
+      type(ObjServer_SeparatorVariant_type)  :: oldinterface_allocation
+      integer(IRL_LargeOffsetIndex_t) :: total_cells
+
+      ! Storage for a cell
+      call new(cell)
+
+      ! Give ourselves an PU neighborhood and reserve 27 cells
+      call new(neighborhood)
+      call reserve(neighborhood, 27)
+
+     allocate(oldinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+     total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
+     call new(oldinterface_allocation,total_cells)
+
+     ! Initialize arrays and setup linking
+     do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+               ! PLIC interface(s)
+               call new(oldinterface(i,j,k),oldinterface_allocation)
+               call copy(oldinterface(i,j,k),this%liquid_gas_interface(i,j,k))
+            end do
+         end do
+      end do
+
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Add polygons to neighborhood
+               call setSize(neighborhood, 0)
+               ind=0
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Add cell to neighborhood
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                           centroid = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
+                           call addMember(neighborhood,centroid,oldinterface(ii,jj,kk))
+                           ! Increment counter
+                           ind=ind+1
+                        end if
+                     end do
+                  end do
+               end do
+                              
+               if (ind.gt.0) then 
+                  ! Perform the reconstruction
+                  centroid = calculateCentroid(this%interface_polygon(1,i,j,k))
+                  delta    =  2.5_WP*(this%cfg%dx(i)+this%cfg%dy(j)+this%cfg%dz(k))/3.0_WP
+                  call reconstructPU3D(neighborhood,centroid,delta,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Match parbolic reconstruction to volume fraction
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(neighborhood)
+               end if
+            end do
+         end do
+      end do
+      
+      deallocate(oldinterface)
+
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_PU
 
    !> Set all domain boundaries to full liquid/gas based on VOF value
    subroutine set_full_bcond(this)
