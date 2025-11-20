@@ -871,12 +871,12 @@ contains
       ! Calculate subcell phasic volumes
       call this%subcell_vol()
       
+      ! Perform PPIC reconstruction
+      if (this%ppic) call this%build_quadratic_interface()
+
       ! Calculate curvature
       call this%get_curvature()
 
-      ! Perform PPIC reconstruction
-      if (this%ppic) call this%build_quadratic_interface()
-      
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
       
@@ -3836,18 +3836,19 @@ contains
 
    !> Partition of Unity reconstruction of a parabolic interface in mixed cells
    subroutine build_PU(this)
-      use mathtools, only: normalize
+      use mathtools, only: normalize,Pi
       implicit none
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
       integer :: ind,ii,jj,kk,icenter
       type(PUSTNeigh_RectCub_type) :: neighborhood
       type(RectCub_type) :: cell
-      real(IRL_double), dimension(3) :: centroid
-      real(IRL_double) :: delta
+      real(IRL_double), dimension(3) :: centroid,normal
+      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac
       type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: oldinterface
       type(ObjServer_SeparatorVariant_type)  :: oldinterface_allocation
       integer(IRL_LargeOffsetIndex_t) :: total_cells
+      real(IRL_double)  , dimension(2) :: principal_curvatures
 
       ! Storage for a cell
       call new(cell)
@@ -3895,8 +3896,15 @@ contains
                      do ii=i-1,i+1
                         ! Add cell to neighborhood
                         if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-                           centroid = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-                           call addMember(neighborhood,centroid,oldinterface(ii,jj,kk))
+                           centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
+                           area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/this%cfg%meshsize(i,j,k)**2
+                           vfrac_weight = 1.0_WP
+                           if (this%VF(ii,jj,kk).lt.0.1_WP) then
+                              vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * this%VF(ii,jj,kk))
+                           else if (this%VF(ii,jj,kk).gt.0.9_WP) then
+                              vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
+                           end if
+                           call addMember(neighborhood,centroid,area_weight*vfrac_weight,oldinterface(ii,jj,kk))
                            ! Increment counter
                            ind=ind+1
                         end if
@@ -3907,12 +3915,27 @@ contains
                if (ind.gt.0) then 
                   ! Perform the reconstruction
                   centroid = calculateCentroid(this%interface_polygon(1,i,j,k))
-                  delta    =  2.5_WP*(this%cfg%dx(i)+this%cfg%dy(j)+this%cfg%dz(k))/3.0_WP
+                  delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
                   call reconstructPU3D(neighborhood,centroid,delta,this%liquid_gas_interface(i,j,k))
                   
+                  ! Clip principal curvatures 
+                  principal_curvatures = getPrincipalCurvatures(this%liquid_gas_interface(i,j,k))
+                  if (principal_curvatures(1) > 2.0_WP/this%cfg%meshsize(i,j,k))   principal_curvatures(1) = 2.0_WP/this%cfg%meshsize(i,j,k)
+                  if (principal_curvatures(1) < -2.0_WP/this%cfg%meshsize(i,j,k))  principal_curvatures(1) = -2.0_WP/this%cfg%meshsize(i,j,k)
+                  if (principal_curvatures(2) > 2.0_WP/this%cfg%meshsize(i,j,k))   principal_curvatures(2) = 2.0_WP/this%cfg%meshsize(i,j,k)
+                  if (principal_curvatures(2) < -2.0_WP/this%cfg%meshsize(i,j,k))  principal_curvatures(2) = -2.0_WP/this%cfg%meshsize(i,j,k)
+                  call setPrincipalCurvatures(this%liquid_gas_interface(i,j,k), principal_curvatures)
+
                   ! Match parbolic reconstruction to volume fraction
                   call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-                  call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+                  call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k)) 
+
+                  ! If matching did not work, replace by plane
+                  call getNormMoments(cell,this%liquid_gas_interface(i,j,k),vfrac)
+                  vfrac = vfrac/this%cfg%vol(i,j,k)
+                  if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
+                     call copy(this%liquid_gas_interface(i,j,k), oldinterface(i,j,k))
+                  end if
 
                   ! Clean up neighborhood
                   call emptyNeighborhood(neighborhood)
@@ -4585,6 +4608,8 @@ contains
       real(WP), dimension(max_interface_planes) :: mycurv,mysurf
       real(WP), dimension(max_interface_planes,3) :: mynorm
       real(WP), dimension(3) :: csn,sn
+      real(IRL_double), dimension(2) :: principal_curvatures
+
       ! Reset curvature
       this%curv=0.0_WP
       if (this%two_planes) this%curv2p=0.0_WP
@@ -4595,38 +4620,47 @@ contains
                ! Zero out curvature and surface storage
                mycurv=0.0_WP; mysurf=0.0_WP; mynorm=0.0_WP
                ! Get a curvature for each plane
-               do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
-                  ! Skip empty polygon
-                  if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
-                  ! Perform LSQ PLIC barycenter fitting to get curvature
-                  !call this%paraboloid_fit(i,j,k,n,mycurv(n))
-                  ! Perform PLIC surface fitting to get curvature
-                  call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))
-                  ! Also store surface and normal
-                  mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
-                  mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
-               end do
-               ! Oriented-surface-average curvature
-               !csn=0.0_WP; sn=0.0_WP
-               !do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
-               !   csn=csn+mysurf(n)*mynorm(n,:)*mycurv(n)
-               !   sn = sn+mysurf(n)*mynorm(n,:)
-               !end do
-               !if (dot_product(sn,sn).gt.10.0_WP*tiny(1.0_WP)) this%curv(i,j,k)=dot_product(csn,sn)/dot_product(sn,sn)
-               ! Surface-averaged curvature
-               if (sum(mysurf).gt.0.0_WP) this%curv(i,j,k)=sum(mysurf*mycurv)/sum(mysurf)
-               ! Curvature of largest surface
-               !if (mysurf(maxloc(mysurf,1)).gt.0.0_WP) this%curv(i,j,k)=mycurv(maxloc(mysurf,1))
-               ! Largest curvature
-               !this%curv(i,j,k)=mycurv(maxloc(abs(mycurv),1))
-               ! Smallest curvature
-               !if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.2) then
-               !   this%curv(i,j,k)=mycurv(minloc(abs(mycurv),1))
-               !else
-               !   this%curv(i,j,k)=mycurv(1)
-               !end if
+               if (isParaboloid(this%liquid_gas_interface(i,j,k))) then
+                  if (getNumberOfVertices(this%interface_polygon(1,i,j,k)).eq.0) cycle
+                  principal_curvatures = getPrincipalCurvatures(this%liquid_gas_interface(i,j,k))
+                  this%curv(i,j,k)     = sum(principal_curvatures)
+               else
+                  do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                     ! Skip empty polygon
+                     if (getNumberOfVertices(this%interface_polygon(n,i,j,k)).eq.0) cycle
+                     ! Perform LSQ PLIC barycenter fitting to get curvature
+                     !call this%paraboloid_fit(i,j,k,n,mycurv(n))
+                     ! Perform PLIC surface fitting to get curvature
+                     call this%paraboloid_integral_fit(i,j,k,n,mycurv(n))
+                     ! Also store surface and normal
+                     mysurf(n)  =abs(calculateVolume(this%interface_polygon(n,i,j,k)))
+                     mynorm(n,:)=    calculateNormal(this%interface_polygon(n,i,j,k))
+                  end do
+                  ! Oriented-surface-average curvature
+                  !csn=0.0_WP; sn=0.0_WP
+                  !do n=1,getNumberOfPlanes(this%liquid_gas_interface(i,j,k))
+                  !   csn=csn+mysurf(n)*mynorm(n,:)*mycurv(n)
+                  !   sn = sn+mysurf(n)*mynorm(n,:)
+                  !end do
+                  !if (dot_product(sn,sn).gt.10.0_WP*tiny(1.0_WP)) this%curv(i,j,k)=dot_product(csn,sn)/dot_product(sn,sn)
+                  ! Surface-averaged curvature
+                  if (sum(mysurf).gt.0.0_WP) this%curv(i,j,k)=sum(mysurf*mycurv)/sum(mysurf)
+                  ! Curvature of largest surface
+                  !if (mysurf(maxloc(mysurf,1)).gt.0.0_WP) this%curv(i,j,k)=mycurv(maxloc(mysurf,1))
+                  ! Largest curvature
+                  !this%curv(i,j,k)=mycurv(maxloc(abs(mycurv),1))
+                  ! Smallest curvature
+                  !if (getNumberOfPlanes(this%liquid_gas_interface(i,j,k)).eq.2) then
+                  !   this%curv(i,j,k)=mycurv(minloc(abs(mycurv),1))
+                  !else
+                  !   this%curv(i,j,k)=mycurv(1)
+                  !end if
+               end if
                ! Clip curvature - may not be needed if we select polygons carefully
                this%curv(i,j,k)=max(min(this%curv(i,j,k),this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))
+               if (isnan(this%curv(i,j,k))) then
+                  write(*,*) 'this%curv(i,j,k) is NaN'
+               end if
                ! Also store 2-plane curvature if needed
                if (this%two_planes) this%curv2p(:,i,j,k)=max(min(mycurv,this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k)),-this%maxcurv_times_mesh/this%cfg%meshsize(i,j,k))
                ! Model edge curvature at 1/thickness
