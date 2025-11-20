@@ -33,6 +33,7 @@ module vfs_class
    integer, parameter, public :: jibben=10           !< PPIC-Jibben
    integer, parameter, public :: PUplic=11           !< PPIC-Partition of Unity from PLIC
    integer, parameter, public :: PUjibben=12         !< PPIC-Partition of Unity from Jibben
+   integer, parameter, public :: taubin=13           !< Taubin circle fit from PLIC
    
    ! List of available interface transport schemes for VF
    integer, parameter, public :: flux=1             !< Flux-based geometric transport
@@ -221,6 +222,7 @@ module vfs_class
       procedure :: build_r2pnet                           !< R2Pnet reconstruction of the interface
       procedure :: build_jibben                           !< PPIC-Jibben reconstruction of the interface
       procedure :: build_PU                               !< PPIC-PU reconstruction of the interface
+      procedure :: build_taubin                           !< Taubin reconstruction of the interface
       procedure :: sense_interface                        !< Calculate various surface sensors
       procedure :: get_thickness                          !< Calculate multiphasic structure thickness
       procedure :: detect_thin_regions                    !< Detect thin regions
@@ -331,7 +333,7 @@ contains
          this%flotsam_thld=1.0e-3_WP  !< This considers any separated structure around dx/10 and below as bogus
          ! Also allow for larger curvatures to be calculated
          this%maxcurv_times_mesh=2.0_WP
-      case (jibben,PUplic,PUjibben)
+      case (jibben,PUplic,PUjibben,taubin)
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
          this%ppic=.true.
@@ -2488,6 +2490,7 @@ contains
       case (r2pnet) ; call this%build_r2pnet()
       case (jibben) ; call this%build_lvira()
       case (PUplic,PUjibben) ; call this%build_lvira()
+      case (taubin) ; call this%build_lvira()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
       ! Follow with interface smoothing
@@ -2504,6 +2507,7 @@ contains
       case (jibben)   ; call this%build_jibben()
       case (PUplic)   ; call this%build_PU()
       case (PUjibben) ; call this%build_jibben(); call this%build_PU()
+      case (taubin)   ; call this%build_taubin();
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
       end select
       ! Follow with interface smoothing
@@ -3833,6 +3837,95 @@ contains
       call this%sync_interface()
       
    end subroutine build_jibben
+
+   !> taubin reconstruction of a parabolic interface in mixed cells
+   subroutine build_taubin(this)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      type(JibbenNeigh_type) :: neighborhood
+      type(RectCub_type) :: cell
+      real(WP) :: w_vf, vfrac, limit_vfrac, pi_wp
+      limit_vfrac = 0.05_WP
+      pi_wp = acos(-1.0_WP)
+      
+      ! Storage for a cell
+      call new(cell)
+
+      ! Give ourselves an Jibben neighborhood and reserve 27 cells
+      call new(neighborhood)
+      call reserve(neighborhood, 27)
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Add polygons to neighborhood
+               call setSize(neighborhood, 0)
+               ind=0
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Add cell to neighborhood
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                           ! calculating volume fraction weight
+                           vfrac = this%VF(ii,jj,kk)
+                           if (vfrac < limit_vfrac) then
+                              w_vf = 0.5_WP - 0.5_WP * cos(pi_wp * vfrac / limit_vfrac)
+                           else if (vfrac > (1.0_WP - limit_vfrac)) then
+                              w_vf = 0.5_WP - 0.5_WP * cos(pi_wp * (1.0_WP - vfrac) / limit_vfrac)
+                           else
+                              w_vf = 1.0_WP 
+                           end if
+                           call addMember(neighborhood,this%interface_polygon(1,ii,jj,kk),w_vf)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              call setCenterOfStencil(neighborhood,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                        end if
+                     end do
+                  end do
+               end do
+                              
+               if (ind.gt.0) then
+                  ! Localize jibben neighborhood
+                  call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
+                  !call localize(neighborhood)
+   
+                  ! Perform the reconstruction
+                  call reconstructTaubin3D(neighborhood,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Match Jibben parbolic reconstruction to volume fraction
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(neighborhood)
+               end if
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_taubin
 
    !> Partition of Unity reconstruction of a parabolic interface in mixed cells
    subroutine build_PU(this)

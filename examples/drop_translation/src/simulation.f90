@@ -90,7 +90,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben,PUplic,PUjibben
+         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben,PUplic,PUjibben,taubin
          use mpi_f08,  only: MPI_WTIME
          use string,   only: str_medium,lowercase
          integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
