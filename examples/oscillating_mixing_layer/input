@@ -17,7 +17,11 @@ Frequency :        1.0
 # Time integration
 Max timestep size : 1e-2
 Max cfl number :    0.8
-Max time :          200
+Max time :          2000
 
 # Ensight output
 Ensight output period : 1e-2
+
+# Restart and save
+Restart output period : 1e0
+# Restart from :          restart_1.00632E+00

@@ -8,6 +8,8 @@ module oml_class
    use monitor_class,     only: monitor
    use ensight_class,     only: ensight
    use event_class,       only: event
+   use datafile_class,    only: datafile
+   use string,            only: str_medium
    implicit none
    private
    
@@ -23,7 +25,10 @@ module oml_class
       type(timetracker) :: time  !< Time info
       !> Ensight postprocessing
       type(ensight)     :: ens_out
-      type(event)       :: ens_evt
+      type(event)       :: ens_evt, save_evt
+      type(datafile) :: df
+      !> Restarted simulation?
+      logical :: restarted
       !> Simulation monitor file
       type(monitor)     :: mfile,cflfile
       !> Work arrays
@@ -79,6 +84,34 @@ contains
          this%cfg=config(grp=group,decomp=partition,grid=grid)
       end block create_config
       
+      ! Handle restart/saves here
+      restart_and_save: block
+         use param,       only: param_read
+         character(len=str_medium) :: dir_restart
+         ! CAREFUL - WE NEED TO CREATE THE TIMETRACKER BEFORE THE EVENT !
+         this%time=timetracker(this%cfg%amRoot,name='oml')
+         ! Create event for saving restart files
+         this%save_evt=event(this%time,'Restart output')
+         call param_read('Restart output period',this%save_evt%tper)
+         ! Check if we are restarting
+         call param_read('Restart from',dir_restart,'r',default='')
+         this%restarted=.false.; if (len_trim(dir_restart).gt.0) this%restarted=.true.
+         if (this%restarted) then
+            ! If we are, read the name of the directory
+            call param_read('Restart from',dir_restart,'r')
+            ! Read the datafile and the name of the IRL file to read later
+            this%df=datafile(pg=this%cfg,fdata=trim(adjustl(dir_restart))//'/'//'data')
+         else 
+            ! If we are not restarting, we will still need datafiles for saving restart files
+            this%df=datafile(pg=this%cfg,filename=trim(this%cfg%name),nval=2,nvar=4)
+            this%df%valname(1)='t'
+            this%df%valname(2)='dt'
+            this%df%varname(1)='U'
+            this%df%varname(2)='V'
+            this%df%varname(3)='W'
+            this%df%varname(4)='P'
+         end if
+      end block restart_and_save
 
       ! Initialize the work arrays
       allocate_work_arrays: block
@@ -94,11 +127,18 @@ contains
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
          use param, only: param_read
-         this%time=timetracker(amRoot=this%cfg%amRoot)
+         ! this%time=timetracker(amRoot=this%cfg%amRoot)
          call param_read('Max timestep size',this%time%dtmax)
+         call param_read('Max time',this%time%tmax)
          call param_read('Max cfl number',this%time%cflmax)
          this%time%dt=this%time%dtmax
          this%time%itmax=2
+         ! Handle restart
+         if (this%restarted) then
+            call this%df%pullval(name='t' ,val=this%time%t )
+            call this%df%pullval(name='dt',val=this%time%dt)
+            this%time%told=this%time%t-this%time%dt
+         end if
       end block initialize_timetracker
       
       
@@ -132,35 +172,43 @@ contains
          use random, only: random_normal
          integer :: i,j,k
          real(WP) :: initial_rms,Umean,Vmean,Wmean
-         ! Gaussian initial field
-         initial_rms=0.1_WP
-         do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
-            do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
-               do i=this%fs%cfg%imin_,this%fs%cfg%imax_
-                  this%fs%U(i,j,k)=random_normal(m=0.0_WP,sd=initial_rms)*exp(-(this%cfg%ym(j)/(0.5_WP*this%thickness))**2)
-                  this%fs%V(i,j,k)=random_normal(m=0.0_WP,sd=initial_rms)*exp(-(this%cfg%y (j)/(0.5_WP*this%thickness))**2)
-                  this%fs%W(i,j,k)=random_normal(m=0.0_WP,sd=initial_rms)*exp(-(this%cfg%ym(j)/(0.5_WP*this%thickness))**2)
+         ! Handle restart
+         if (this%restarted) then
+            call this%df%pullvar(name='U'  ,var=this%fs%U  )
+            call this%df%pullvar(name='V'  ,var=this%fs%V  )
+            call this%df%pullvar(name='W'  ,var=this%fs%W  )
+            call this%df%pullvar(name='P'  ,var=this%fs%P  )
+         else
+            ! Gaussian initial field
+            initial_rms=0.1_WP
+            do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+               do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+                  do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                     this%fs%U(i,j,k)=random_normal(m=0.0_WP,sd=initial_rms)*exp(-(this%cfg%ym(j)/(0.5_WP*this%thickness))**2)
+                     this%fs%V(i,j,k)=random_normal(m=0.0_WP,sd=initial_rms)*exp(-(this%cfg%y (j)/(0.5_WP*this%thickness))**2)
+                     this%fs%W(i,j,k)=random_normal(m=0.0_WP,sd=initial_rms)*exp(-(this%cfg%ym(j)/(0.5_WP*this%thickness))**2)
+                  end do
                end do
             end do
-         end do
-         call this%fs%cfg%sync(this%fs%U)
-         call this%fs%cfg%sync(this%fs%V)
-         call this%fs%cfg%sync(this%fs%W)
-         ! Compute mean and remove it from the velocity field to obtain <U>=0
-         call this%fs%cfg%integrate(A=this%fs%U,integral=Umean); Umean=Umean/this%fs%cfg%vol_total; this%fs%U=this%fs%U-Umean
-         call this%fs%cfg%integrate(A=this%fs%V,integral=Vmean); Vmean=Vmean/this%fs%cfg%vol_total; this%fs%V=this%fs%V-Vmean
-         call this%fs%cfg%integrate(A=this%fs%W,integral=Wmean); Wmean=Wmean/this%fs%cfg%vol_total; this%fs%W=this%fs%W-Wmean
-         ! Project to ensure divergence-free
-         call this%fs%get_div()
-         this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div
-         this%fs%psolv%sol=0.0_WP
-         call this%fs%psolv%solve()
-         call this%fs%shift_p(this%fs%psolv%sol)
-         call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
-         this%fs%P=this%fs%P+this%fs%psolv%sol
-         this%fs%U=this%fs%U-this%resU
-         this%fs%V=this%fs%V-this%resV
-         this%fs%W=this%fs%W-this%resW
+            call this%fs%cfg%sync(this%fs%U)
+            call this%fs%cfg%sync(this%fs%V)
+            call this%fs%cfg%sync(this%fs%W)
+            ! Compute mean and remove it from the velocity field to obtain <U>=0
+            call this%fs%cfg%integrate(A=this%fs%U,integral=Umean); Umean=Umean/this%fs%cfg%vol_total; this%fs%U=this%fs%U-Umean
+            call this%fs%cfg%integrate(A=this%fs%V,integral=Vmean); Vmean=Vmean/this%fs%cfg%vol_total; this%fs%V=this%fs%V-Vmean
+            call this%fs%cfg%integrate(A=this%fs%W,integral=Wmean); Wmean=Wmean/this%fs%cfg%vol_total; this%fs%W=this%fs%W-Wmean
+            ! Project to ensure divergence-free
+            call this%fs%get_div()
+            this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div
+            this%fs%psolv%sol=0.0_WP
+            call this%fs%psolv%solve()
+            call this%fs%shift_p(this%fs%psolv%sol)
+            call this%fs%get_pgrad(this%fs%psolv%sol,this%resU,this%resV,this%resW)
+            this%fs%P=this%fs%P+this%fs%psolv%sol
+            this%fs%U=this%fs%U-this%resU
+            this%fs%V=this%fs%V-this%resV
+            this%fs%W=this%fs%W-this%resW
+         end if
          ! Calculate cell-centered velocities and divergence
          call this%fs%interp_vel(this%Ui,this%Vi,this%Wi)
          call this%fs%get_div()
@@ -318,6 +366,25 @@ contains
       call this%mfile%write()
       call this%cflfile%write()
       
+      ! Finally, see if it's time to save restart files
+      if (this%save_evt%occurs()) then
+         save_restart: block
+            character(len=str_medium) :: dirname,timestamp
+            ! Prefix for files
+            dirname='restart_'; write(timestamp,'(es12.5)') this%time%t
+            ! Prepare a new directory
+            if (this%cfg%amRoot) call execute_command_line('mkdir -p '//trim(adjustl(dirname))//trim(adjustl(timestamp)))
+            ! Populate this%df and write it
+            call this%df%pushval(name=  't',val=this%time%t )
+            call this%df%pushval(name= 'dt',val=this%time%dt)
+            call this%df%pushvar(name=  'U',var=this%fs%U   )
+            call this%df%pushvar(name=  'V',var=this%fs%V   )
+            call this%df%pushvar(name=  'W',var=this%fs%W   )
+            call this%df%pushvar(name=  'P',var=this%fs%P   )
+            call this%df%write(fdata=trim(adjustl(dirname))//trim(adjustl(timestamp))//'/'//'data')
+         end block save_restart
+      end if
+
    end subroutine step
    
 
