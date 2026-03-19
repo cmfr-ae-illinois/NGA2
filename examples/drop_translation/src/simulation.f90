@@ -320,6 +320,7 @@ contains
          call fs%get_olddensity(vf=vf)
          
          ! VOF solver step
+         
          call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
 
          ! Advance and project tracer particles

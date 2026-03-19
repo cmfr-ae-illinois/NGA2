@@ -3841,7 +3841,7 @@ contains
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
       integer :: ind,ii,jj,kk,icenter
-      type(PUSTNeigh_RectCub_type) :: neighborhood
+      type(PUNeigh_RectCub_type) :: neighborhood
       type(RectCub_type) :: cell
       real(IRL_double), dimension(3) :: centroid
       real(IRL_double) :: delta
@@ -3896,7 +3896,7 @@ contains
                         ! Add cell to neighborhood
                         if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
                            centroid = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-                           call addMember(neighborhood,centroid,oldinterface(ii,jj,kk))
+                           call addMember(neighborhood,centroid,1.0_WP,oldinterface(ii,jj,kk))
                            ! Increment counter
                            ind=ind+1
                         end if
