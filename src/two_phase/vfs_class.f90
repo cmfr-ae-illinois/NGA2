@@ -3760,6 +3760,7 @@ contains
       integer :: ind,ii,jj,kk,icenter
       type(JibbenNeigh_type) :: neighborhood
       type(RectCub_type) :: cell
+      logical :: found_center
       
       ! Storage for a cell
       call new(cell)
@@ -3786,6 +3787,7 @@ contains
                ! Add polygons to neighborhood
                call setSize(neighborhood, 0)
                ind=0
+               found_center=.false.
                do kk=k-1,k+1
                   do jj=j-1,j+1
                      do ii=i-1,i+1
@@ -3795,6 +3797,7 @@ contains
                            ! Trap and set stencil center
                            if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                               icenter=ind
+                              found_center=.true.
                               call setCenterOfStencil(neighborhood,icenter)
                            end if
                            ! Increment counter
@@ -3803,8 +3806,7 @@ contains
                      end do
                   end do
                end do
-                              
-               if (ind.gt.0) then
+               if (ind.gt.0.and.found_center) then
                   ! Localize jibben neighborhood
                   call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
                   call localize(neighborhood)
