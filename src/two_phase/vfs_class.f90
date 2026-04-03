@@ -3770,6 +3770,7 @@ contains
       integer :: ind,ii,jj,kk,icenter
       type(JibbenNeigh_type) :: neighborhood
       type(RectCub_type) :: cell
+      logical :: found_center
       
       ! Storage for a cell
       call new(cell)
@@ -3796,6 +3797,7 @@ contains
                ! Add polygons to neighborhood
                call setSize(neighborhood, 0)
                ind=0
+               found_center=.false.
                do kk=k-1,k+1
                   do jj=j-1,j+1
                      do ii=i-1,i+1
@@ -3805,6 +3807,7 @@ contains
                            ! Trap and set stencil center
                            if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                               icenter=ind
+                              found_center=.true.
                               call setCenterOfStencil(neighborhood,icenter)
                            end if
                            ! Increment counter
@@ -3814,7 +3817,7 @@ contains
                   end do
                end do
                               
-               if (ind.gt.0) then
+               if (ind.gt.0.and.found_center) then
                   ! Localize jibben neighborhood
                   call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
                   call localize(neighborhood)
@@ -3847,7 +3850,8 @@ contains
       integer :: ind,ii,jj,kk,icenter
       type(JibbenNeigh_type) :: neighborhood
       type(RectCub_type) :: cell
-      real(WP) :: w_vf, vfrac, limit_vfrac, pi_wp
+      logical :: found_center
+      real(WP) :: w_vf, vfrac, limit_vfrac, pi_wp, w_area, cell_volume
       limit_vfrac = 0.05_WP
       pi_wp = acos(-1.0_WP)
       
@@ -3876,6 +3880,7 @@ contains
                ! Add polygons to neighborhood
                call setSize(neighborhood, 0)
                ind=0
+               found_center=.false.
                do kk=k-1,k+1
                   do jj=j-1,j+1
                      do ii=i-1,i+1
@@ -3890,10 +3895,15 @@ contains
                            else
                               w_vf = 1.0_WP 
                            end if
-                           call addMember(neighborhood,this%interface_polygon(1,ii,jj,kk),w_vf)
+                           ! volume of cell
+                           cell_volume = this%cfg%dx(ii)*this%cfg%dy(jj)*this%cfg%dz(kk)
+                           ! computing area weight
+                           w_area = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk))) / cell_volume**(2.0_WP/3.0_WP)
+                           call addMember(neighborhood,this%interface_polygon(1,ii,jj,kk),w_vf*w_area)
                            ! Trap and set stencil center
                            if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                               icenter=ind
+                              found_center=.true.
                               call setCenterOfStencil(neighborhood,icenter)
                            end if
                            ! Increment counter
@@ -3903,15 +3913,13 @@ contains
                   end do
                end do
                               
-               if (ind.gt.0) then
-                  ! Localize jibben neighborhood
+               if (ind.gt.0.and.found_center) then
                   call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
-                  !call localize(neighborhood)
    
                   ! Perform the reconstruction
                   call reconstructTaubin3D(neighborhood,this%liquid_gas_interface(i,j,k))
                   
-                  ! Match Jibben parbolic reconstruction to volume fraction
+                  ! Match taubin parbolic reconstruction to volume fraction
                   call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
                   call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
 
