@@ -3896,7 +3896,7 @@ contains
                         ! Add cell to neighborhood
                         if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
                            centroid = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-                           call addMember(neighborhood,centroid,1.0_WP,oldinterface(ii,jj,kk))
+                           call addMember(neighborhood,centroid,1.0_WP,oldinterface(ii,jj,kk),0.0_WP)
                            ! Increment counter
                            ind=ind+1
                         end if
