@@ -35,6 +35,7 @@ module vfs_class
    integer, parameter, public :: jibbenSq=12         !< PPIC-Jibben squared volume
    integer, parameter, public :: PUppic=13           !< PU-PPIC
    integer, parameter, public :: PUplic=14           !< PU-PLIC
+   integer, parameter, public :: jibbenPLIC=15       !< Jibben-PLIC
    
    ! List of available interface transport schemes for VF
    integer, parameter, public :: flux=1             !< Flux-based geometric transport
@@ -172,6 +173,12 @@ module vfs_class
       real(WP) :: VFmax,VFmin,VFint,SDint                 !< Maximum, minimum, and integral volume fraction and surface density
       real(WP) :: flotsam_error                           !< Integral of flotsam removal error
       real(WP) :: thinstruct_error                        !< Integral of thin structure removal error
+
+      ! Rayleigh plateau monitoring
+      real(WP) :: max_radius
+
+      ! interface type for interface surface scalar
+      real(WP), dimension(:,:,:), allocatable :: interface_type
       
       ! Additional storage option for geometric transport of auxiliary quantities
       type(TagAccVM_SepVM_type), dimension(:,:,:,:), allocatable :: detailed_face_flux    !< Cell-decomposed face flux geometric data
@@ -222,6 +229,7 @@ module vfs_class
       procedure :: build_plicnet                          !< PLICnet reconstruction of the interface from VF and bary fields
       procedure :: build_r2pnet                           !< R2Pnet reconstruction of the interface
       procedure :: build_jibben                           !< PPIC-Jibben reconstruction of the interface
+      procedure :: build_jibbenPLIC                       !< PPIC-Jibben and PLIC reconstruction of the interface
       procedure :: build_jibbenPU                         !< PPIC-Jibben and PU hybrid reconstruction of the interface
       procedure :: build_jibbenSq                         !< PPIC-Jibben squared volume reconstruction of the interface
       procedure :: build_PUppic                           !< PU-PPIC reconstruction of the interface
@@ -251,6 +259,8 @@ module vfs_class
       procedure :: copy_interface_to_old                  !< Copy interface variables at beginning of timestep
       procedure :: fluxpoly_project_getmoments            !< Project face to get flux volume and output its moments
       procedure :: fluxpoly_cell_getvolcentr              !< Get the volume and centroid during generalized SL advection
+
+      procedure :: compute_rp_max_radius
 
    end type vfs
    
@@ -297,6 +307,7 @@ contains
       allocate(this%SD   (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%SD   =0.0_WP
       allocate(this%G    (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%G    =0.0_WP
       allocate(this%curv (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%curv =0.0_WP
+      allocate(this%interface_type (  this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%interface_type =0.0_WP
       
       ! Fluxing velocities
       allocate(this%UFl(1:3,this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); this%UFl=0.0_WP
@@ -337,6 +348,10 @@ contains
          ! Also allow for larger curvatures to be calculated
          this%maxcurv_times_mesh=2.0_WP
       case (jibben)
+         this%reconstruction_method=reconstruction_method
+         this%two_planes=.false.
+         this%ppic=.true.
+      case (jibbenPLIC)
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
          this%ppic=.true.
@@ -897,6 +912,9 @@ contains
 
       ! Perform PPIC reconstruction
       if (this%ppic) call this%build_quadratic_interface()
+
+      ! diagonostic for rayleigh plateau instability
+      call this%compute_rp_max_radius()
       
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
@@ -2507,10 +2525,11 @@ contains
       case (youngs) ; call this%build_youngs()
       case (plicnet); call this%build_plicnet()
       case (r2pnet) ; call this%build_r2pnet()
-      case (jibben) ; call this%build_plicnet()
-      ! case (jibbenPU) ; call this%build_lvira()
+      case (jibben) ; call this%build_lvira()
+      case (jibbenPLIC) ; call this%build_plicnet()
       case (jibbenPU) ; call this%build_plicnet()
-      case (jibbenSq) ; call this%build_lvira()
+      ! case (jibbenPU) ; call this%build_plicnet()
+      case (jibbenSq) ; call this%build_plicnet()
       case (PUppic)   ; call this%build_lvira()
       case (PUplic)   ; call this%build_lvira()
       case default; call die('[vfs build interface] Unknown interface reconstruction scheme')
@@ -2527,6 +2546,7 @@ contains
       ! Reconstruct interface - will need to support various methods
       select case (this%reconstruction_method)
       case (jibben) ; call this%build_jibben()
+      case (jibbenPLIC) ; call this%build_jibbenPLIC()
       case (jibbenPU) ; call this%build_jibbenPU()
       case (jibbenSq) ; call this%build_jibbenSq()
       case (PUppic)   ; call this%build_PUppic()
@@ -3863,8 +3883,151 @@ contains
       
    end subroutine build_jibben
 
-   !> Jibben squared volume reconstruction of a parabolic interface in mixed cells
-   subroutine build_jibbenSq(this)
+   !> Jibben reconstruction of a parabolic interface in mixed cells
+   ! subroutine build_jibbenPLIC(this)
+   !    use mathtools, only: normalize
+   !    implicit none
+   !    class(vfs), intent(inout) :: this
+   !    integer(IRL_SignedIndex_t) :: i,j,k
+   !    integer :: ind,ii,jj,kk,icenter
+   !    type(JibbenNeigh_type) :: neighborhood
+   !    type(RectCub_type) :: cell
+   !    logical :: found_center
+   !    logical, dimension(:,:,:), allocatable :: is_underresolved
+   !    real(IRL_double) :: angular_variance, volumeSquareError, VF_supercell
+   !    real(IRL_double), dimension(2) :: principal_curvatures
+   !    type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: plicinterface
+   !    type(ObjServer_SeparatorVariant_type)  :: plicinterface_allocation
+   !    integer(IRL_LargeOffsetIndex_t) :: total_cells
+      
+   !    ! Storage for a cell
+   !    call new(cell)
+
+   !    ! Give ourselves an Jibben neighborhood and reserve 27 cells
+   !    call new(neighborhood)
+   !    call reserve(neighborhood, 27)
+
+   !    ! allocation for plic interface
+   !    allocate(plicinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+   !    total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
+   !    call new(plicinterface_allocation,total_cells)
+
+   !    allocate(is_underresolved(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+   !    is_underresolved=.false.
+
+   !    ! copying plic interfaces
+   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
+   !      do j=this%cfg%jmino_,this%cfg%jmaxo_
+   !         do i=this%cfg%imino_,this%cfg%imaxo_
+   !             call new(plicinterface(i,j,k),plicinterface_allocation)
+   !             call copy(plicinterface(i,j,k),this%liquid_gas_interface(i,j,k))
+   !          end do
+   !       end do
+   !    end do
+      
+   !    ! Traverse domain and reconstruct interface
+   !    do k=this%cfg%kmin_,this%cfg%kmax_
+   !       do j=this%cfg%jmin_,this%cfg%jmax_
+   !          do i=this%cfg%imin_,this%cfg%imax_
+               
+   !             ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+   !             if (this%mask(i,j,k).ne.0) cycle
+               
+   !             ! Handle full cells differently
+   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+   !                cycle
+   !             end if
+
+   !             VF_supercell = 0.0_WP
+               
+   !             ! Add polygons to neighborhood
+   !             call setSize(neighborhood, 0)
+   !             ind=0
+   !             found_center=.false.
+   !             do kk=k-1,k+1
+   !                do jj=j-1,j+1
+   !                   do ii=i-1,i+1
+   !                      VF_supercell = VF_supercell + this%VF(ii,jj,kk)
+   !                      ! Add cell to neighborhood
+   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+   !                         call addMember(neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
+   !                         ! Trap and set stencil center
+   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+   !                            icenter=ind
+   !                            found_center=.true.
+   !                            call setCenterOfStencil(neighborhood,icenter)
+   !                         end if
+   !                         ! Increment counter
+   !                         ind=ind+1
+   !                      end if
+   !                   end do
+   !                end do
+   !             end do
+   !             if (ind.gt.0.and.found_center) then
+   !                ! Localize jibben neighborhood
+   !                call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
+   !                call localize(neighborhood)
+
+   !                ! super cell check
+   !                if (this%VF(i,j,k).lt.0.01_WP.and.VF_supercell.lt.0.1_WP) then
+   !                   is_underresolved(i,j,k)=.true.
+   !                   cycle ! use plic
+   !                end if
+
+   !                ! metric = reconstructionMetricWithJibben3D(neighborhood)
+   !                angular_variance = angularVarianceMetricWithJibben3D(neighborhood)
+   !                volumeSquareError = volumeErrorSquaredWithJibben3D(neighborhood, this%cfg%dx(i))
+   !                print*, "volume squared error = ", volumeSquareError
+   !                ! if (angular_variance.gt.0.2_WP.or.volumeSquareError.gt.0.1_WP) then
+   !                if (angular_variance.gt.0.2_WP) then
+   !                   is_underresolved(i,j,k)=.true.
+   !                   cycle ! use plic
+   !                end if
+                  
+   !                ! checking number of neighbors
+   !                if (ind.lt.2) then
+   !                   is_underresolved(i,j,k)=.true.
+   !                   cycle ! use plic if there are less than 2 neighbors
+   !                end if
+   
+   !                ! Perform the reconstruction
+   !                call reconstructJibbenSq3D(neighborhood,this%liquid_gas_interface(i,j,k))
+   !                principal_curvatures = getPrincipalCurvatures(this%liquid_gas_interface(i,j,k))
+   !                if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
+   !                   call copy(this%liquid_gas_interface(i,j,k),plicinterface(i,j,k)) ! replace by plane
+   !                   is_underresolved(i,j,k)=.true.
+   !                   cycle
+   !                end if
+                  
+   !                ! Match Jibben parbolic reconstruction to volume fraction
+   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+   !                call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+
+   !                ! Clean up neighborhood
+   !                call emptyNeighborhood(neighborhood)
+   !             end if
+   !          end do
+   !       end do
+   !    end do
+      
+   !    ! Synchronize across boundaries
+   !    call this%sync_interface()
+
+   !    do k=this%cfg%kmin_,this%cfg%kmax_
+   !       do j=this%cfg%jmin_,this%cfg%jmax_
+   !          do i=this%cfg%imin_,this%cfg%imax_
+   !             if (is_underresolved(i,j,k)) then
+   !                this%interface_type(i, j, k) = 1.0_WP ! 1 for plic; 0 for ppic
+   !             end if
+   !          end do
+   !       end do
+   !    end do
+
+   ! end subroutine build_jibbenPLIC
+
+   subroutine build_jibbenPLIC(this)
       use mathtools, only: normalize
       implicit none
       class(vfs), intent(inout) :: this
@@ -3873,6 +4036,7 @@ contains
       type(JibbenNeigh_type) :: neighborhood
       type(RectCub_type) :: cell
       logical :: found_center
+      real(IRL_double) :: squaredVolError
       
       ! Storage for a cell
       call new(cell)
@@ -3922,6 +4086,110 @@ contains
                   ! Localize jibben neighborhood
                   call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
                   call localize(neighborhood)
+
+                  ! squared volume error
+                  squaredVolError = volumeErrorSquaredWithJibben3D(neighborhood, this%cfg%dx(i))
+
+                  if (squaredVolError.gt.0.05_WP) then
+                  this%interface_type(i, j, k) = 1.0_WP
+                     cycle
+                  end if
+   
+                  ! Perform the reconstruction
+                  call reconstructJibbenSq3D(neighborhood,this%liquid_gas_interface(i,j,k))
+                  
+                  ! Match Jibben parbolic reconstruction to volume fraction
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
+
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(neighborhood)
+               end if
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_jibbenPLIC
+
+   !> Jibben squared volume reconstruction of a parabolic interface in mixed cells
+   subroutine build_jibbenSq(this)
+      use mathtools, only: normalize
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      type(JibbenNeigh_type) :: neighborhood
+      type(RectCub_type) :: cell
+      logical :: found_center
+      real(IRL_double) :: squaredVolError,angular_variance,normal_metric
+      
+      ! Storage for a cell
+      call new(cell)
+
+      ! Give ourselves an Jibben neighborhood and reserve 27 cells
+      call new(neighborhood)
+      call reserve(neighborhood, 27)
+      
+      ! Traverse domain and reconstruct interface
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               
+               ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+               
+               ! Add polygons to neighborhood
+               call setSize(neighborhood, 0)
+               ind=0
+               found_center=.false.
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Add cell to neighborhood
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                           call addMember(neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              found_center=.true.
+                              call setCenterOfStencil(neighborhood,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                        end if
+                     end do
+                  end do
+               end do
+               if (ind.gt.0.and.found_center) then
+                  ! Localize jibben neighborhood
+                  call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
+                  call localize(neighborhood)
+
+                  ! squared volume error
+                  squaredVolError = volumeErrorSquaredWithJibben3D(neighborhood, this%cfg%dx(i))
+                  angular_variance = angularVarianceMetricWithJibben3D(neighborhood)
+                  normal_metric = reconstructionMetricWithJibben3D(neighborhood)
+                  ! this%interface_type(i, j, k) = angular_variance
+
+                  ! if (squaredVolError.gt.0.05_WP) then
+                  ! this%interface_type(i, j, k) = 1.0_WP
+                  !    cycle
+                  ! end if
+
+                  if (normal_metric.gt.0.15_WP) then
+                     this%interface_type(i, j, k) = 1.0_WP
+                     cycle
+                  end if
    
                   ! Perform the reconstruction
                   call reconstructJibbenSq3D(neighborhood,this%liquid_gas_interface(i,j,k))
@@ -4436,7 +4704,7 @@ contains
 
                   ! checking normal metric to mark it under resolved or not
                   metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
-                  if (metric.gt.0.2_WP) then
+                  if (metric.gt.0.3_WP) then
                      is_underresolved(i,j,k)=.true.
                      ! replace jibben in PU by planar interface if underresolved
                      call copy(puinterface(i,j,k), this%liquid_gas_interface(i,j,k))
@@ -4505,19 +4773,22 @@ contains
                   call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
                   call matchVolumeFraction(cell,this%VF(i,j,k),temppuinterface(i,j,k))
 
+                  ! storing in pu reconstruction is curvature checks are met
+                  principal_curvatures = getPrincipalCurvatures(temppuinterface(i,j,k))
+                  if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
+                     call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
+                     cycle
+                  end if
+
                   ! If volume matching did not work, replace by plane
                   call getNormMoments(cell,temppuinterface(i,j,k),vfrac)
                   vfrac = vfrac/this%cfg%vol(i,j,k)
                   if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
                      call copy(temppuinterface(i,j,k), this%liquid_gas_interface(i,j,k))
+                     print *, "Volume fraction mismatch in cell (",i,",",j,",",k,") = ", vfrac, " vs ", this%VF(i,j,k)
                      cycle
                   end if
 
-                  ! storing in pu reconstruction is curvature checks are met
-                  principal_curvatures = getPrincipalCurvatures(temppuinterface(i,j,k))
-                  if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
-                     call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-                  end if
 
                   ! Clean up neighborhood
                   call emptyNeighborhood(pu_neighborhood)
@@ -4586,7 +4857,7 @@ contains
       type(ObjServer_SeparatorVariant_type)  :: jibbeninterface_allocation, puinterface_allocation
       integer(IRL_LargeOffsetIndex_t) :: total_cells
       real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, volume_supercell
+      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, volume_supercell,metric
       real(IRL_double), dimension(3) :: normal, centroid
       
       ! Storage for a cell
@@ -4667,12 +4938,17 @@ contains
                   call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
 
                   ! storing in pu reconstruction is curvature checks are met
-                  principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
-                  ! if (abs(principal_curvatures(1)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).le.(1.0_WP/this%cfg%meshsize(i, j, k))) then
-                  !    call copy(puinterface(i,j,k),jibbeninterface(i,j,k))
+                  ! principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
+                  ! ! if (abs(principal_curvatures(1)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).le.(1.0_WP/this%cfg%meshsize(i, j, k))) then
+                  ! !    call copy(puinterface(i,j,k),jibbeninterface(i,j,k))
+                  ! ! end if
+                  ! if (abs(principal_curvatures(1)).gt.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).gt.(1.0_WP/this%cfg%meshsize(i, j, k))) then
+                  !    call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i, j, k))
                   ! end if
-                  if (abs(principal_curvatures(1)).gt.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).gt.(1.0_WP/this%cfg%meshsize(i, j, k))) then
-                     call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i, j, k))
+
+                  metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
+                  if (metric.gt.0.2_WP) then
+                     call copy(jibbeninterface(i,j,k), this%liquid_gas_interface(i,j,k))
                   end if
 
                   ! Clean up neighborhood
@@ -4761,25 +5037,25 @@ contains
       end do
 
       ! super cell check (pu clean up)
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-                  volume_supercell = 0.0_WP
-                  do kk=k-1,k+1
-                     do jj=j-1,j+1
-                        do ii=i-1,i+1
-                           volume_supercell = volume_supercell + this%VF(ii,jj,kk)
-                        end do
-                     end do
-                  end do
-                  if (this%VF(i,j,k).lt.0.01_WP.and.volume_supercell.lt.0.1_WP) then
-                     call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-                  end if
-               end if
-            end do
-         end do
-      end do
+      ! do k=this%cfg%kmin_,this%cfg%kmax_
+      !    do j=this%cfg%jmin_,this%cfg%jmax_
+      !       do i=this%cfg%imin_,this%cfg%imax_
+      !          if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+      !             volume_supercell = 0.0_WP
+      !             do kk=k-1,k+1
+      !                do jj=j-1,j+1
+      !                   do ii=i-1,i+1
+      !                      volume_supercell = volume_supercell + this%VF(ii,jj,kk)
+      !                   end do
+      !                end do
+      !             end do
+      !             if (this%VF(i,j,k).lt.0.01_WP.and.volume_supercell.lt.0.1_WP) then
+      !                call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
+      !             end if
+      !          end if
+      !       end do
+      !    end do
+      ! end do
 
 
       !final interfaces      
@@ -4949,6 +5225,37 @@ contains
       call this%sync_interface()
       
    end subroutine build_PUplic
+
+   !> computing maximum radius during growth of ligament for rayleigh pletau instability test case
+   subroutine compute_rp_max_radius(this)
+      use mpi_f08, only: MPI_ALLREDUCE, MPI_MAX, MPI_DOUBLE_PRECISION
+      use mathtools, only: Pi
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ierr
+      real(WP) :: radius
+      real(WP) :: max_radius_local, max_radius_global
+
+      max_radius_local = 5.0_WP
+
+      ! do k=this%cfg%kmin_,this%cfg%kmax_
+      !    do j=this%cfg%jmin_,this%cfg%jmax_
+      !       do i=this%cfg%imin_,this%cfg%imax_
+      !          if (this%VF(i,j,k) .gt. 0.5_WP) then
+      !             radius = sqrt(2.0_WP*this%cfg%vol(i,j,k)/Pi)
+      !             if (radius .gt. max_radius_local) then
+      !                max_radius_local = radius
+      !             end if
+      !          end if
+      !       end do
+      !    end do
+      ! end do
+
+      call MPI_ALLREDUCE(max_radius_local, max_radius_global, 1, &
+         MPI_DOUBLE_PRECISION, MPI_MAX, this%cfg%comm, ierr)
+
+      this%max_radius = max_radius_global
+   end subroutine compute_rp_max_radius
 
    !> Set all domain boundaries to full liquid/gas based on VOF value
    subroutine set_full_bcond(this)
