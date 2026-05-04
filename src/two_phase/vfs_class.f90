@@ -175,7 +175,7 @@ module vfs_class
       real(WP) :: thinstruct_error                        !< Integral of thin structure removal error
 
       ! Rayleigh plateau monitoring
-      real(WP) :: max_radius
+      real(WP) :: max_radius, min_radius
 
       ! interface type for interface surface scalar
       real(WP), dimension(:,:,:), allocatable :: interface_type
@@ -261,6 +261,7 @@ module vfs_class
       procedure :: fluxpoly_cell_getvolcentr              !< Get the volume and centroid during generalized SL advection
 
       procedure :: compute_rp_max_radius
+      procedure :: compute_rp_min_radius
 
    end type vfs
    
@@ -915,6 +916,7 @@ contains
 
       ! diagonostic for rayleigh plateau instability
       call this%compute_rp_max_radius()
+      call this%compute_rp_min_radius()
       
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
@@ -5128,6 +5130,14 @@ contains
          end do
       end do
 
+      ! do k=this%cfg%kmino_,this%cfg%kmaxo_
+      !    do j=this%cfg%jmino_,this%cfg%jmaxo_
+      !       do i=this%cfg%imino_,this%cfg%imaxo_
+      !          call copy(this%liquid_gas_interface(i,j,k),puinterface(i,j,k))
+      !       end do
+      !    end do
+      ! end do
+
       
       ! Synchronize across boundaries
       call this%sync_interface()
@@ -5748,34 +5758,105 @@ contains
 
    !> computing maximum radius during growth of ligament for rayleigh pletau instability test case
    subroutine compute_rp_max_radius(this)
-      use mpi_f08, only: MPI_ALLREDUCE, MPI_MAX, MPI_DOUBLE_PRECISION
+      use mpi_f08, only: MPI_ALLREDUCE, MPI_MAX, MPI_SUM, MPI_DOUBLE_PRECISION
       use mathtools, only: Pi
       implicit none
+
       class(vfs), intent(inout) :: this
-      integer :: i,j,k,ierr
-      real(WP) :: radius
+      integer :: i,j,k,ierr,nk
+      real(WP) :: radius_k
       real(WP) :: max_radius_local, max_radius_global
+      real(WP), allocatable, dimension(:) :: slice_volume_local, slice_volume_global
 
-      max_radius_local = 5.0_WP
+      allocate(slice_volume_local(this%cfg%kmin:this%cfg%kmax))
+      allocate(slice_volume_global(this%cfg%kmin:this%cfg%kmax))
 
-      ! do k=this%cfg%kmin_,this%cfg%kmax_
-      !    do j=this%cfg%jmin_,this%cfg%jmax_
-      !       do i=this%cfg%imin_,this%cfg%imax_
-      !          if (this%VF(i,j,k) .gt. 0.5_WP) then
-      !             radius = sqrt(2.0_WP*this%cfg%vol(i,j,k)/Pi)
-      !             if (radius .gt. max_radius_local) then
-      !                max_radius_local = radius
-      !             end if
-      !          end if
-      !       end do
-      !    end do
-      ! end do
+      slice_volume_local  = 0.0_WP
+      slice_volume_global = 0.0_WP
+
+      ! Accumulate local contribution to each global z-slice
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               slice_volume_local(k) = slice_volume_local(k) + &
+                  this%VF(i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+
+      nk = this%cfg%kmax - this%cfg%kmin + 1
+
+      ! Sum slice volumes entrywise across all ranks
+      call MPI_ALLREDUCE(slice_volume_local, slice_volume_global, nk, &
+         MPI_DOUBLE_PRECISION, MPI_SUM, this%cfg%comm, ierr)
+
+      max_radius_local = 0.0_WP
+
+      do k=this%cfg%kmin,this%cfg%kmax
+         if (slice_volume_global(k) .gt. 0.0_WP) then
+            radius_k = sqrt(slice_volume_global(k)/(Pi*this%cfg%dz(k)))
+            if (radius_k .gt. max_radius_local) max_radius_local = radius_k
+         end if
+      end do
 
       call MPI_ALLREDUCE(max_radius_local, max_radius_global, 1, &
          MPI_DOUBLE_PRECISION, MPI_MAX, this%cfg%comm, ierr)
 
       this%max_radius = max_radius_global
+
+      deallocate(slice_volume_local, slice_volume_global)
    end subroutine compute_rp_max_radius
+
+   !> computing minimum radius during growth of ligament for rayleigh pletau instability test case
+   subroutine compute_rp_min_radius(this)
+      use mpi_f08, only: MPI_ALLREDUCE, MPI_MIN, MPI_SUM, MPI_DOUBLE_PRECISION
+      use mathtools, only: Pi
+      implicit none
+
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,ierr,nk
+      real(WP) :: dz, radius_k
+      real(WP) :: min_radius_local, min_radius_global
+      real(WP), allocatable :: slice_volume_local(:), slice_volume_global(:)
+
+      allocate(slice_volume_local(this%cfg%kmin:this%cfg%kmax))
+      allocate(slice_volume_global(this%cfg%kmin:this%cfg%kmax))
+
+      slice_volume_local  = 0.0_WP
+      slice_volume_global = 0.0_WP
+
+      ! Accumulate local contribution to each global z-slice
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               slice_volume_local(k) = slice_volume_local(k) + &
+                  this%VF(i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+
+      nk = this%cfg%kmax - this%cfg%kmin + 1
+
+      ! Sum slice volumes entrywise across all ranks
+      call MPI_ALLREDUCE(slice_volume_local, slice_volume_global, nk, &
+         MPI_DOUBLE_PRECISION, MPI_SUM, this%cfg%comm, ierr)
+
+      min_radius_local = huge(1.0_WP)
+
+      do k=this%cfg%kmin,this%cfg%kmax
+         if (slice_volume_global(k) .gt. 0.0_WP) then
+            radius_k = sqrt(slice_volume_global(k)/(Pi*this%cfg%dz(k)))
+            if (radius_k .lt. min_radius_local) min_radius_local = radius_k
+         end if
+      end do
+
+      call MPI_ALLREDUCE(min_radius_local, min_radius_global, 1, &
+         MPI_DOUBLE_PRECISION, MPI_MIN, this%cfg%comm, ierr)
+
+      this%min_radius = min_radius_global
+
+      deallocate(slice_volume_local, slice_volume_global)
+   end subroutine compute_rp_min_radius
 
    !> Set all domain boundaries to full liquid/gas based on VOF value
    subroutine set_full_bcond(this)
