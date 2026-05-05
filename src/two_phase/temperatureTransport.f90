@@ -188,17 +188,18 @@ subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
     real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: rhoV     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: rhoW     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+    real(WP) :: H_upx,H_upy,H_upz,diff_x,diff_y,diff_z
     integer :: i,j,k
     ! Updated diff
     ! Testing Quick Scheme
-    this%nst=3
+    this%nst=1
     this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
     this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
     do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_+1
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
-                this%diff(i,j,k) = this%vf%VF(i,j,k)*this%k1 + (1-this%vf%VF(i,j,k)) *this%k2 ! Linear on VF
-                ! this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%k1 + (1.0_WP-this%vf%VF(i,j,k))/this%k2) ! Harmoinc on VF
+                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%k1 + (1-this%vf%VF(i,j,k)) *this%k2 ! Linear on VF
+                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%k1 + (1.0_WP-this%vf%VF(i,j,k))/this%k2) ! Harmoinc on VF
                 this%rho_cp(i,j,k) = (this%vf%VF(i,j,k)*this%rho1 + (1.0_WP-this%vf%VF(i,j,k))*this%rho2)* &
                 &(this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
             end do
@@ -213,17 +214,31 @@ subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
     do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_+1
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
-                FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%H(i+this%stp1:i+this%stp2,j,k)) &
-                &         -0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%H(i+this%stm1:i+this%stm2,j,k)) &
-                &         +sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k))*sum(this%grd_x(:,i,j,k)*this%H(i-1:i,j,k))
+                ! Calculate Upwind Values
+                H_upx=this%H(i,j,k)
+                H_upy=this%H(i,j,k)
+                H_upz=this%H(i,j,k)
+                diff_x=0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%diff(i+this%stp1:i+this%stp2,j,k)) &
+                &     +0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%diff(i+this%stm1:i+this%stm2,j,k));
+
+                diff_y=0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stp1:j+this%stp2,k)) &
+                &     +0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stm1:j+this%stm2,k)) ;
+
+                diff_z=0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stp1:k+this%stp2)) &
+                &     +0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stm1:k+this%stm2));
+
+                ! Fluxes on x-face
+                FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%H(i+this%stp1:i+this%stp2,j,k)) &
+                &         -0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%H(i+this%stm1:i+this%stm2,j,k)) &
+                &         +diff_x*sum(this%grd_x(:,i,j,k)*this%H(i-1:i,j,k))
                 ! Fluxes on y-face
-                FY(i,j,k)=-0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%H(i,j+this%stp1:j+this%stp2,k)) &
-                &         -0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%H(i,j+this%stm1:j+this%stm2,k)) &
-                &         +sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k))*sum(this%grd_y(:,i,j,k)*this%H(i,j-1:j,k))
+                FY(i,j,k)=-0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%H(i,j+this%stp1:j+this%stp2,k)) &
+                &         -0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%H(i,j+this%stm1:j+this%stm2,k)) &
+                &         +diff_y*sum(this%grd_y(:,i,j,k)*this%H(i,j-1:j,k))
                 ! Fluxes on z-face
-                FZ(i,j,k)=-0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%H(i,j,k+this%stp1:k+this%stp2)) &
-                &         -0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%H(i,j,k+this%stm1:k+this%stm2)) &
-                &         +sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k))*sum(this%grd_z(:,i,j,k)*this%H(i,j,k-1:k))
+                FZ(i,j,k)=-0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%H(i,j,k+this%stp1:k+this%stp2)) &
+                &         -0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%H(i,j,k+this%stm1:k+this%stm2)) &
+                &         +diff_z*sum(this%grd_z(:,i,j,k)*this%H(i,j,k-1:k))
             end do
         end do
     end do
@@ -232,8 +247,8 @@ subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_
                 dHdt(i,j,k)=sum(this%fs%divp_x(:,i,j,k)*FX(i:i+1,j,k))+&
-                &               sum(this%fs%divp_y(:,i,j,k)*FY(i,j:j+1,k))+&
-                &               sum(this%fs%divp_z(:,i,j,k)*FZ(i,j,k:k+1))
+                &           sum(this%fs%divp_y(:,i,j,k)*FY(i,j:j+1,k))+&
+                &           sum(this%fs%divp_z(:,i,j,k)*FZ(i,j,k:k+1))
             end do
         end do
     end do
