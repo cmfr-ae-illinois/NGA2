@@ -4210,639 +4210,286 @@ contains
       call this%sync_interface()
       
    end subroutine build_jibbenSq
-
-   !> Jibben and PU hybrid reconstruction of a parabolic interface in mixed cells
-   ! subroutine build_jibbenPU(this)
-   !    use mathtools, only: normalize,Pi
-   !    implicit none
-   !    class(vfs), intent(inout) :: this
-   !    integer(IRL_SignedIndex_t) :: i,j,k
-   !    integer :: ind,ii,jj,kk,icenter
-   !    type(JibbenNeigh_type) :: jibben_neighborhood
-   !    type(PUNeigh_type) :: pu_neighborhood
-   !    type(RectCub_type) :: cell
-   !    logical :: found_center
-   !    type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: temppuinterface, jibbeninterface, puinterface
-   !    type(ObjServer_SeparatorVariant_type)  :: temppuinterface_allocation, jibbeninterface_allocation, puinterface_allocation
-   !    integer(IRL_LargeOffsetIndex_t) :: total_cells
-   !    logical, dimension(:,:,:), allocatable :: is_underresolved
-   !    real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-   !    real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, volume_supercell, metric
-   !    real(IRL_double), dimension(3) :: normal, centroid
-      
-   !    ! Storage for a cell
-   !    call new(cell)
-
-   !    ! jibben and pu neighborhood
-   !    call new(jibben_neighborhood)
-   !    call reserve(jibben_neighborhood, 27)
-   !    call new(pu_neighborhood)
-   !    call reserve(pu_neighborhood, 27)
-
-   !    ! allocation for interfaces
-   !    allocate(temppuinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(jibbeninterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(puinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
-   !    call new(temppuinterface_allocation,total_cells)
-   !    call new(jibbeninterface_allocation,total_cells)
-   !    call new(puinterface_allocation,total_cells)
-
-   !    allocate(is_underresolved(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); 
-   !    is_underresolved=.false.
-
-   !    ! storing PLIC interfaces first
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !      do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !         do i=this%cfg%imino_,this%cfg%imaxo_
-   !             call new(temppuinterface(i,j,k),temppuinterface_allocation)
-   !             call new(jibbeninterface(i,j,k),jibbeninterface_allocation)
-   !             call new(puinterface(i,j,k),puinterface_allocation)
-   !             call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !             call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !             call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !          end do
-   !       end do
-   !    end do
-
-   !    ! First, Jibben reconstruction =====================================================
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-
-   !          ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-
-   !             ! Filling up jibben neighborhood
-   !             call setSize(jibben_neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         call addMember(jibben_neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(jibben_neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                ! Localize jibben neighborhood
-   !                call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
-   !                call localize(jibben_neighborhood)
-   
-   !                ! Perform the reconstruction
-   !                call reconstructJibben3D(jibben_neighborhood,jibbeninterface(i,j,k))
-                  
-   !                ! Match Jibben parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
-
-   !                ! storing in pu reconstruction is curvature checks are met
-   !                principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
-   !                if (abs(principal_curvatures(1)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).le.(1.0_WP/this%cfg%meshsize(i, j, k))) then
-   !                   call copy(puinterface(i,j,k),jibbeninterface(i,j,k))
-   !                end if
-
-   !                ! checking normal metric to mark it under resolved or not
-   !                metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
-   !                ! print *, "Metric for cell (",i,",",j,",",k,") = ", metric
-   !                if (metric.gt.0.2_WP) then
-   !                   is_underresolved(i,j,k)=.true.
-   !                end if
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(jibben_neighborhood)
-   !             end if
-            
-   !          end do
-   !       end do         
-   !    end do
-
-   !    ! Second, PU reconstruction =====================================================
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-
-   !          ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-
-   !             ! Filling up pu neighborhood
-   !             call setSize(pu_neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-   !                         area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/this%cfg%meshsize(i,j,k)**2
-   !                         vfrac_weight = 1.0_WP
-   !                         if (this%VF(ii,jj,kk).lt.0.1_WP) then
-   !                            vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * this%VF(ii,jj,kk))
-   !                         else if (this%VF(ii,jj,kk).gt.0.9_WP) then
-   !                            vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
-   !                         end if
-   !                         call addMember(pu_neighborhood,puinterface(ii,jj,kk),centroid,area_weight*vfrac_weight)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(pu_neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
-   
-   !                ! Perform the reconstruction
-   !                call reconstructPU3D(pu_neighborhood,delta,this%cfg%meshsize(i,j,k),temppuinterface(i,j,k))
-                  
-   !                ! Match PU parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),temppuinterface(i,j,k))
-
-   !                ! If volume matching did not work, replace by plane
-   !                call getNormMoments(cell,temppuinterface(i,j,k),vfrac)
-   !                vfrac = vfrac/this%cfg%vol(i,j,k)
-   !                if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
-   !                   call copy(temppuinterface(i,j,k), this%liquid_gas_interface(i,j,k))
-   !                   cycle
-   !                end if
-
-   !                ! storing in pu reconstruction is curvature checks are met
-   !                principal_curvatures = getPrincipalCurvatures(temppuinterface(i,j,k))
-   !                if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
-   !                   call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-   !                end if
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(pu_neighborhood)
-   !             end if
-            
-   !          end do
-   !       end do         
-   !    end do
-
-   !    ! super cell check (pu clean up)
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                volume_supercell = 0.0_WP
-   !                do kk=k-1,k+1
-   !                   do jj=j-1,j+1
-   !                      do ii=i-1,i+1
-   !                         volume_supercell = volume_supercell + this%VF(ii,jj,kk)
-   !                      end do
-   !                   end do
-   !                end do
-   !                if (this%VF(i,j,k).lt.0.01_WP.and.volume_supercell.lt.0.1_WP) then
-   !                   call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-   !                end if
-   !             end if
-   !          end do
-   !       end do
-   !    end do
-
-
-   !    !final interfaces      
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !       do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !          do i=this%cfg%imino_,this%cfg%imaxo_
-   !             if (is_underresolved(i, j, k)) then
-   !                call copy(this%liquid_gas_interface(i,j,k),temppuinterface(i,j,k))
-   !                ! call copy(this%liquid_gas_interface(i,j,k),jibbeninterface(i,j,k))
-   !             else 
-   !                call copy(this%liquid_gas_interface(i,j,k),jibbeninterface(i,j,k))
-   !                ! call copy(this%liquid_gas_interface(i,j,k),temppuinterface(i,j,k))
-   !             end if
-   !          end do
-   !       end do
-   !    end do
-
-      
-   !    ! Synchronize across boundaries
-   !    call this%sync_interface()
-      
-   ! end subroutine build_jibbenPU
-
-   ! subroutine build_jibbenPU(this)
-   !    use mathtools, only: normalize,Pi
-   !    implicit none
-   !    class(vfs), intent(inout) :: this
-   !    integer(IRL_SignedIndex_t) :: i,j,k
-   !    integer :: ind,ii,jj,kk,icenter
-   !    type(JibbenNeigh_type) :: jibben_neighborhood
-   !    type(PUNeigh_type) :: pu_neighborhood
-   !    type(RectCub_type) :: cell
-   !    logical :: found_center
-   !    type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: temppuinterface, jibbeninterface, puinterface
-   !    type(ObjServer_SeparatorVariant_type)  :: temppuinterface_allocation, jibbeninterface_allocation, puinterface_allocation
-   !    integer(IRL_LargeOffsetIndex_t) :: total_cells
-   !    logical, dimension(:,:,:), allocatable :: is_underresolved
-   !    real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-   !    real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, volume_supercell, metric
-   !    real(IRL_double), dimension(3) :: normal, centroid
-      
-   !    ! Storage for a cell
-   !    call new(cell)
-
-   !    ! jibben and pu neighborhood
-   !    call new(jibben_neighborhood)
-   !    call reserve(jibben_neighborhood, 27)
-   !    call new(pu_neighborhood)
-   !    call reserve(pu_neighborhood, 27)
-
-   !    ! allocation for interfaces
-   !    allocate(temppuinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(jibbeninterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(puinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
-   !    call new(temppuinterface_allocation,total_cells)
-   !    call new(jibbeninterface_allocation,total_cells)
-   !    call new(puinterface_allocation,total_cells)
-
-   !    allocate(is_underresolved(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); 
-   !    is_underresolved=.false.
-
-   !    ! storing PLIC interfaces first
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !      do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !         do i=this%cfg%imino_,this%cfg%imaxo_
-   !             call new(temppuinterface(i,j,k),temppuinterface_allocation)
-   !             call new(jibbeninterface(i,j,k),jibbeninterface_allocation)
-   !             call new(puinterface(i,j,k),puinterface_allocation)
-   !             call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !             call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !             call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !          end do
-   !       end do
-   !    end do
-
-   !    ! First, Jibben reconstruction =====================================================
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-
-   !          ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-
-   !             ! Filling up jibben neighborhood
-   !             call setSize(jibben_neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         call addMember(jibben_neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(jibben_neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                ! Localize jibben neighborhood
-   !                call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
-   !                call localize(jibben_neighborhood)
-   
-   !                ! Perform the reconstruction
-   !                call reconstructJibben3D(jibben_neighborhood,jibbeninterface(i,j,k))
-                  
-   !                ! Match Jibben parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
-
-   !                ! checking normal metric to mark it under resolved or not
-   !                metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
-   !                ! print *, "Metric for cell (",i,",",j,",",k,") = ", metric
-   !                if (metric.gt.0.2_WP) then
-   !                   is_underresolved(i,j,k)=.true.
-   !                end if
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(jibben_neighborhood)
-   !             end if
-            
-   !          end do
-   !       end do         
-   !    end do
-
-   !    !final interfaces      
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !       do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !          do i=this%cfg%imino_,this%cfg%imaxo_
-   !             if (is_underresolved(i, j, k)) then
-   !                ! call copy(this%liquid_gas_interface(i,j,k),temppuinterface(i,j,k))
-   !                cycle
-   !             else 
-   !                call copy(this%liquid_gas_interface(i,j,k),jibbeninterface(i,j,k))
-   !                ! call copy(this%liquid_gas_interface(i,j,k),temppuinterface(i,j,k))
-   !             end if
-   !          end do
-   !       end do
-   !    end do
-
-      
-   !    ! Synchronize across boundaries
-   !    call this%sync_interface()
-      
-   ! end subroutine build_jibbenPU
-
-   ! subroutine build_jibbenPU(this)
-   !    use mathtools, only: normalize,Pi
-   !    implicit none
-   !    class(vfs), intent(inout) :: this
-   !    integer(IRL_SignedIndex_t) :: i,j,k
-   !    integer :: ind,ii,jj,kk,icenter
-   !    type(JibbenNeigh_type) :: jibben_neighborhood
-   !    type(PUNeigh_type) :: pu_neighborhood
-   !    type(RectCub_type) :: cell
-   !    logical :: found_center
-   !    type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: temppuinterface, jibbeninterface, puinterface
-   !    type(ObjServer_SeparatorVariant_type)  :: temppuinterface_allocation, jibbeninterface_allocation, puinterface_allocation
-   !    integer(IRL_LargeOffsetIndex_t) :: total_cells
-   !    logical, dimension(:,:,:), allocatable :: is_underresolved
-   !    real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-   !    real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, volume_supercell, metric
-   !    real(IRL_double), dimension(3) :: normal, centroid
-      
-   !    ! Storage for a cell
-   !    call new(cell)
-
-   !    ! jibben and pu neighborhood
-   !    call new(jibben_neighborhood)
-   !    call reserve(jibben_neighborhood, 27)
-   !    call new(pu_neighborhood)
-   !    call reserve(pu_neighborhood, 27)
-
-   !    ! allocation for interfaces
-   !    allocate(temppuinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(jibbeninterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(puinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
-   !    call new(temppuinterface_allocation,total_cells)
-   !    call new(jibbeninterface_allocation,total_cells)
-   !    call new(puinterface_allocation,total_cells)
-
-   !    allocate(is_underresolved(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); 
-   !    is_underresolved=.false.
-
-   !    ! storing PLIC interfaces first
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !      do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !         do i=this%cfg%imino_,this%cfg%imaxo_
-   !             call new(temppuinterface(i,j,k),temppuinterface_allocation)
-   !             call new(jibbeninterface(i,j,k),jibbeninterface_allocation)
-   !             call new(puinterface(i,j,k),puinterface_allocation)
-   !             call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !             call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !             call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !          end do
-   !       end do
-   !    end do
-
-   !    ! First, Jibben reconstruction =====================================================
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-
-   !          ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-
-   !             ! Filling up jibben neighborhood
-   !             call setSize(jibben_neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         call addMember(jibben_neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(jibben_neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                ! Localize jibben neighborhood
-   !                call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
-   !                call localize(jibben_neighborhood)
-   
-   !                ! Perform the reconstruction
-   !                call reconstructJibben3D(jibben_neighborhood,jibbeninterface(i,j,k))
-                  
-   !                ! Match Jibben parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
-
-   !                ! storing in pu reconstruction is curvature checks are met
-   !                ! principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
-   !                ! if (abs(principal_curvatures(1)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).le.(1.0_WP/this%cfg%meshsize(i, j, k))) then
-   !                !    call copy(puinterface(i,j,k),jibbeninterface(i,j,k))
-   !                ! end if
-
-   !                call copy(puinterface(i,j,k),jibbeninterface(i,j,k)) ! use jibben for pu reconstruction                  
-
-   !                ! checking normal metric to mark it under resolved or not
-   !                metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
-   !                if (metric.gt.0.3_WP) then
-   !                   is_underresolved(i,j,k)=.true.
-   !                   ! replace jibben in PU by planar interface if underresolved
-   !                   call copy(puinterface(i,j,k), this%liquid_gas_interface(i,j,k))
-   !                end if
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(jibben_neighborhood)
-   !             end if
-            
-   !          end do
-   !       end do         
-   !    end do
-
-   !    ! Second, PU reconstruction =====================================================
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-
-   !          ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-
-   !             ! Filling up pu neighborhood
-   !             call setSize(pu_neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-   !                         area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/this%cfg%meshsize(i,j,k)**2
-   !                         vfrac_weight = 1.0_WP
-   !                         if (this%VF(ii,jj,kk).lt.0.1_WP) then
-   !                            vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * this%VF(ii,jj,kk))
-   !                         else if (this%VF(ii,jj,kk).gt.0.9_WP) then
-   !                            vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
-   !                         end if
-   !                         call addMember(pu_neighborhood,puinterface(ii,jj,kk),centroid,area_weight*vfrac_weight)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(pu_neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
-   
-   !                ! Perform the reconstruction
-   !                call reconstructPU3D(pu_neighborhood,delta,this%cfg%meshsize(i,j,k),temppuinterface(i,j,k))
-                  
-   !                ! Match PU parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),temppuinterface(i,j,k))
-
-   !                ! storing in pu reconstruction is curvature checks are met
-   !                principal_curvatures = getPrincipalCurvatures(temppuinterface(i,j,k))
-   !                if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
-   !                   call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-   !                   cycle
-   !                end if
-
-   !                ! If volume matching did not work, replace by plane
-   !                call getNormMoments(cell,temppuinterface(i,j,k),vfrac)
-   !                vfrac = vfrac/this%cfg%vol(i,j,k)
-   !                if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
-   !                   call copy(temppuinterface(i,j,k), this%liquid_gas_interface(i,j,k))
-   !                   print *, "Volume fraction mismatch in cell (",i,",",j,",",k,") = ", vfrac, " vs ", this%VF(i,j,k)
-   !                   cycle
-   !                end if
-
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(pu_neighborhood)
-   !             end if
-            
-   !          end do
-   !       end do         
-   !    end do
-
-   !    ! super cell check (pu clean up)
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                volume_supercell = 0.0_WP
-   !                do kk=k-1,k+1
-   !                   do jj=j-1,j+1
-   !                      do ii=i-1,i+1
-   !                         volume_supercell = volume_supercell + this%VF(ii,jj,kk)
-   !                      end do
-   !                   end do
-   !                end do
-   !                if (this%VF(i,j,k).lt.0.01_WP.and.volume_supercell.lt.0.1_WP) then
-   !                   call copy(temppuinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-   !                end if
-   !             end if
-   !          end do
-   !       end do
-   !    end do
-
-
-   !    !final interfaces      
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !       do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !          do i=this%cfg%imino_,this%cfg%imaxo_
-   !             if (is_underresolved(i, j, k)) then
-   !                call copy(this%liquid_gas_interface(i,j,k),temppuinterface(i,j,k))
-   !                cycle
-   !             else 
-   !                call copy(this%liquid_gas_interface(i,j,k),jibbeninterface(i,j,k))
-   !                ! call copy(this%liquid_gas_interface(i,j,k),temppuinterface(i,j,k))
-   !             end if
-   !          end do
-   !       end do
-   !    end do
-
-      
-   !    ! Synchronize across boundaries
-   !    call this%sync_interface()
-      
-   ! end subroutine build_jibbenPU
    
    subroutine build_jibbenPU(this)
+      use mathtools, only: normalize,Pi
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer(IRL_SignedIndex_t) :: i,j,k
+      integer :: ind,ii,jj,kk,icenter
+      type(JibbenNeigh_type) :: jibben_neighborhood
+      type(PUNeigh_type) :: pu_neighborhood
+      type(RectCub_type) :: cell
+      logical :: found_center
+      type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: jibbeninterface, puinterface, puneighborhoodinterface, finalinterface
+      type(ObjServer_SeparatorVariant_type)  :: jibbeninterface_allocation, puinterface_allocation, puneighborhoodinterface_allocation, finalinterface_allocation
+      integer(IRL_LargeOffsetIndex_t) :: total_cells
+      logical, dimension(:,:,:), allocatable :: is_underresolved
+      real(IRL_DOUBLE), dimension(2) :: principal_curvatures
+      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, vf_supercell, normal_metric, squaredVolError
+      real(IRL_double), dimension(3) :: normal, centroid
+      
+      ! Storage for a cell
+      call new(cell)
+
+      ! jibben and pu neighborhood
+      call new(jibben_neighborhood)
+      call reserve(jibben_neighborhood, 27)
+      call new(pu_neighborhood)
+      call reserve(pu_neighborhood, 27)
+
+      ! allocation for interfaces
+      allocate(jibbeninterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(puinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(puneighborhoodinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      allocate(finalinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+      total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
+      call new(jibbeninterface_allocation,total_cells)
+      call new(puinterface_allocation,total_cells)
+      call new(puneighborhoodinterface_allocation,total_cells)
+      call new(finalinterface_allocation,total_cells)
+
+      allocate(is_underresolved(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_)); 
+      is_underresolved=.false.
+
+      ! storing PLIC interfaces first
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+        do j=this%cfg%jmino_,this%cfg%jmaxo_
+           do i=this%cfg%imino_,this%cfg%imaxo_
+               call new(jibbeninterface(i,j,k),jibbeninterface_allocation)
+               call new(puinterface(i,j,k),puinterface_allocation)
+               call new(puneighborhoodinterface(i,j,k),puneighborhoodinterface_allocation)
+               call new(finalinterface(i,j,k),finalinterface_allocation)
+               call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i,j,k))
+               call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
+               call copy(puneighborhoodinterface(i,j,k),this%liquid_gas_interface(i,j,k))
+               call copy(finalinterface(i,j,k),this%liquid_gas_interface(i,j,k))
+            end do
+         end do
+      end do
+
+      ! First, Jibben reconstruction =====================================================
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+
+            ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+
+               ! Filling up jibben neighborhood
+               call setSize(jibben_neighborhood, 0)
+               ind=0
+               found_center=.false.
+               vf_supercell = 0.0_WP
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Add cell to neighborhood
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                           call addMember(jibben_neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              found_center=.true.
+                              call setCenterOfStencil(jibben_neighborhood,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                           ! accumulate supercell volume fraction
+                           vf_supercell = vf_supercell + this%VF(ii,jj,kk)
+                        end if
+                     end do
+                  end do
+               end do
+               if (ind.gt.0.and.found_center) then
+                  ! Localize jibben neighborhood
+                  call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
+                  call localize(jibben_neighborhood)
+
+                  ! neighbor count check
+                  if (ind.lt.2) then
+                     is_underresolved(i,j,k)=.true.
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle ! use plic
+                  end if
+
+                  ! supercell check
+                  if (this%VF(i,j,k).lt.0.01_WP.and.vf_supercell.lt.0.1_WP) then
+                     is_underresolved(i,j,k)=.true.
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle ! use plic
+                  end if
+
+                  ! checking normal scatter metric
+                  normal_metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
+                  if (normal_metric.gt.0.10_WP) then
+                     is_underresolved(i,j,k)=.true.
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle ! use plic
+                  end if
+
+                  ! squared volume error
+                  squaredVolError = volumeErrorSquaredWithJibben3D(jibben_neighborhood, this%cfg%meshsize(i,j,k))
+                  if (squaredVolError.gt.0.05_WP) then
+                     is_underresolved(i,j,k)=.true.
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle ! use plic
+                  end if
+   
+                  ! Jibben squared volume reconstruction
+                  call reconstructJibbenSq3D(jibben_neighborhood,jibbeninterface(i,j,k))
+                  
+                  ! Match Jibben parbolic reconstruction to volume fraction
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
+
+                  ! storing in pu reconstruction is curvature checks are met
+                  principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
+                  ! if (abs(principal_curvatures(1)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).and.abs(principal_curvatures(2)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).and.) then
+                  if (abs(principal_curvatures(1)).le.(1.0_WP / this%cfg%meshsize(i,j,k)).and.&
+                     abs(principal_curvatures(2)).le.(1.0_WP / this%cfg%meshsize(i,j,k)).and.&
+                     (.not.is_underresolved(i,j,k))) then
+                     call copy(puneighborhoodinterface(i,j,k),jibbeninterface(i,j,k))
+                  end if
+
+                  if (.not.is_underresolved(i,j,k)) then
+                     if (abs(principal_curvatures(1)).ge.(4.0_WP / this%cfg%meshsize(i,j,k)).or.&
+                        abs(principal_curvatures(2)).ge.(4.0_WP / this%cfg%meshsize(i,j,k))) then
+                        call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! use jibben for final interface if curvature is not too high
+                     end if
+                  end if
+
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(jibben_neighborhood)
+               end if
+            
+            end do
+         end do         
+      end do
+
+      ! Second, PU reconstruction =====================================================
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+
+            ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
+               if (this%mask(i,j,k).ne.0) cycle
+               
+               ! Handle full cells differently
+               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
+                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
+                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
+                  cycle
+               end if
+
+               ! Filling up pu neighborhood
+               call setSize(pu_neighborhood, 0)
+               ind=0
+               found_center=.false.
+               vf_supercell = 0.0_WP
+               do kk=k-1,k+1
+                  do jj=j-1,j+1
+                     do ii=i-1,i+1
+                        ! Add cell to neighborhood
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                           centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
+                           area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/(this%cfg%meshsize(i,j,k)**2)
+                           vfrac_weight = 1.0_WP
+                           if (this%VF(ii,jj,kk).lt.0.1_WP) then
+                              vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * this%VF(ii,jj,kk))
+                           else if (this%VF(ii,jj,kk).gt.0.9_WP) then
+                              vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
+                           end if
+                           call addMember(pu_neighborhood,puneighborhoodinterface(ii,jj,kk),centroid,area_weight*vfrac_weight)
+                           ! Trap and set stencil center
+                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                              icenter=ind
+                              found_center=.true.
+                              call setCenterOfStencil(pu_neighborhood,icenter)
+                           end if
+                           ! Increment counter
+                           ind=ind+1
+                           ! accumulate supercell volume fraction
+                           vf_supercell = vf_supercell + this%VF(ii,jj,kk)
+                        end if
+                     end do
+                  end do
+               end do
+               if (ind.gt.0.and.found_center) then
+                  delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
+
+                  ! neighbor count check
+                  if (ind.lt.2) then
+                     is_underresolved(i,j,k)=.true.
+                     call emptyNeighborhood(pu_neighborhood)
+                     cycle ! use plic
+                  end if
+
+                  ! supercell check
+                  if (this%VF(i,j,k).lt.0.01_WP.and.vf_supercell.lt.0.1_WP) then
+                     is_underresolved(i,j,k)=.true.
+                     call emptyNeighborhood(pu_neighborhood)
+                     cycle ! use plic
+                  end if
+   
+                  ! PU reconstruction
+                  call reconstructPU3D(pu_neighborhood,delta,this%cfg%meshsize(i,j,k),puinterface(i,j,k))
+
+                  ! checking curvature
+                  principal_curvatures = getPrincipalCurvatures(puinterface(i,j,k))
+                  if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
+                     call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
+                     call emptyNeighborhood(pu_neighborhood)
+                     cycle
+                  end if
+
+                  ! Match PU parbolic reconstruction to volume fraction
+                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  call matchVolumeFraction(cell,this%VF(i,j,k),puinterface(i,j,k))
+
+                  ! If volume matching did not work, replace by plane
+                  call getNormMoments(cell,puinterface(i,j,k),vfrac)
+                  vfrac = vfrac/this%cfg%vol(i,j,k)
+                  if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
+                     call copy(puinterface(i,j,k), this%liquid_gas_interface(i,j,k))
+                     cycle
+                  end if
+
+                  ! Clean up neighborhood
+                  call emptyNeighborhood(pu_neighborhood)
+               end if
+            
+            end do
+         end do         
+      end do
+
+      !final interfaces      
+      do k=this%cfg%kmino_,this%cfg%kmaxo_
+         do j=this%cfg%jmino_,this%cfg%jmaxo_
+            do i=this%cfg%imino_,this%cfg%imaxo_
+               if (is_underresolved(i, j, k)) then
+                  call copy(this%liquid_gas_interface(i,j,k),puinterface(i,j,k))
+                  cycle
+               else 
+                  call copy(this%liquid_gas_interface(i,j,k),jibbeninterface(i,j,k))
+               end if
+            end do
+         end do
+      end do
+      
+      ! Synchronize across boundaries
+      call this%sync_interface()
+      
+   end subroutine build_jibbenPU
+
+   subroutine build_PUppic(this)
       use mathtools, only: normalize,Pi
       implicit none
       class(vfs), intent(inout) :: this
@@ -5094,501 +4741,6 @@ contains
          end do         
       end do
 
-      ! ! super cell check (pu clean up)
-      ! do k=this%cfg%kmin_,this%cfg%kmax_
-      !    do j=this%cfg%jmin_,this%cfg%jmax_
-      !       do i=this%cfg%imin_,this%cfg%imax_
-      !          if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-      !             volume_supercell = 0.0_WP
-      !             do kk=k-1,k+1
-      !                do jj=j-1,j+1
-      !                   do ii=i-1,i+1
-      !                      volume_supercell = volume_supercell + this%VF(ii,jj,kk)
-      !                   end do
-      !                end do
-      !             end do
-      !             if (this%VF(i,j,k).lt.0.01_WP.and.volume_supercell.lt.0.1_WP) then
-      !                call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-      !             end if
-      !          end if
-      !       end do
-      !    end do
-      ! end do
-
-
-      !final interfaces      
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-         do j=this%cfg%jmino_,this%cfg%jmaxo_
-            do i=this%cfg%imino_,this%cfg%imaxo_
-               if (is_underresolved(i, j, k)) then
-                  call copy(this%liquid_gas_interface(i,j,k),puinterface(i,j,k))
-                  cycle
-               else 
-                  call copy(this%liquid_gas_interface(i,j,k),jibbeninterface(i,j,k))
-               end if
-            end do
-         end do
-      end do
-
-      ! do k=this%cfg%kmino_,this%cfg%kmaxo_
-      !    do j=this%cfg%jmino_,this%cfg%jmaxo_
-      !       do i=this%cfg%imino_,this%cfg%imaxo_
-      !          call copy(this%liquid_gas_interface(i,j,k),puinterface(i,j,k))
-      !       end do
-      !    end do
-      ! end do
-
-      
-      ! Synchronize across boundaries
-      call this%sync_interface()
-      
-   end subroutine build_jibbenPU
-
-   !> PU reconstruction using ppic as local approximant
-   ! subroutine build_PUppic(this)
-   !    use mathtools, only: normalize,Pi
-   !    implicit none
-   !    class(vfs), intent(inout) :: this
-   !    integer(IRL_SignedIndex_t) :: i,j,k
-   !    integer :: ind,ii,jj,kk,icenter
-   !    type(JibbenNeigh_type) :: jibben_neighborhood
-   !    type(PUNeigh_type) :: pu_neighborhood
-   !    type(RectCub_type) :: cell
-   !    logical :: found_center
-   !    type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: jibbeninterface, puinterface
-   !    type(ObjServer_SeparatorVariant_type)  :: jibbeninterface_allocation, puinterface_allocation
-   !    integer(IRL_LargeOffsetIndex_t) :: total_cells
-   !    real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-   !    real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, volume_supercell,metric
-   !    real(IRL_double), dimension(3) :: normal, centroid
-      
-   !    ! Storage for a cell
-   !    call new(cell)
-
-   !    ! jibben and pu neighborhood
-   !    call new(jibben_neighborhood)
-   !    call reserve(jibben_neighborhood, 27)
-   !    call new(pu_neighborhood)
-   !    call reserve(pu_neighborhood, 27)
-
-   !    ! allocation for interfaces
-   !    allocate(jibbeninterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    allocate(puinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-   !    total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
-   !    call new(jibbeninterface_allocation,total_cells)
-   !    call new(puinterface_allocation,total_cells)
-
-   !    ! storing PLIC interfaces first
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !      do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !         do i=this%cfg%imino_,this%cfg%imaxo_
-   !             call new(jibbeninterface(i,j,k),jibbeninterface_allocation)
-   !             call new(puinterface(i,j,k),puinterface_allocation)
-   !             call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !             call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-   !          end do
-   !       end do
-   !    end do
-
-   !    ! First, Jibben reconstruction =====================================================
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-
-   !          ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-
-   !             ! Filling up jibben neighborhood
-   !             call setSize(jibben_neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         call addMember(jibben_neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(jibben_neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                ! Localize jibben neighborhood
-   !                call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
-   !                call localize(jibben_neighborhood)
-   
-   !                ! Perform the reconstruction
-   !                call reconstructJibben3D(jibben_neighborhood,jibbeninterface(i,j,k))
-                  
-   !                ! Match Jibben parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
-
-   !                ! storing in pu reconstruction is curvature checks are met
-   !                ! principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
-   !                ! ! if (abs(principal_curvatures(1)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).le.(1.0_WP/this%cfg%meshsize(i, j, k))) then
-   !                ! !    call copy(puinterface(i,j,k),jibbeninterface(i,j,k))
-   !                ! ! end if
-   !                ! if (abs(principal_curvatures(1)).gt.(1.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).gt.(1.0_WP/this%cfg%meshsize(i, j, k))) then
-   !                !    call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i, j, k))
-   !                ! end if
-
-   !                metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
-   !                if (metric.gt.0.2_WP) then
-   !                   call copy(jibbeninterface(i,j,k), this%liquid_gas_interface(i,j,k))
-   !                end if
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(jibben_neighborhood)
-   !             end if
-            
-   !          end do
-   !       end do         
-   !    end do
-
-   !    ! Second, PU reconstruction =====================================================
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-
-   !          ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-
-   !             ! Filling up pu neighborhood
-   !             call setSize(pu_neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-   !                         area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/this%cfg%meshsize(i,j,k)**2
-   !                         vfrac_weight = 1.0_WP
-   !                         if (this%VF(ii,jj,kk).lt.0.1_WP) then
-   !                            vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * this%VF(ii,jj,kk))
-   !                         else if (this%VF(ii,jj,kk).gt.0.9_WP) then
-   !                            vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
-   !                         end if
-   !                         call addMember(pu_neighborhood,jibbeninterface(ii,jj,kk),centroid,area_weight*vfrac_weight)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(pu_neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
-   
-   !                ! Perform the reconstruction
-   !                call reconstructPU3D(pu_neighborhood,delta,this%cfg%meshsize(i,j,k),puinterface(i,j,k))
-                  
-   !                ! Match PU parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),puinterface(i,j,k))
-
-   !                ! If volume matching did not work, replace by plane
-   !                call getNormMoments(cell,puinterface(i,j,k),vfrac)
-   !                vfrac = vfrac/this%cfg%vol(i,j,k)
-   !                if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
-   !                   call copy(puinterface(i,j,k), this%liquid_gas_interface(i,j,k))
-   !                   cycle
-   !                end if
-
-   !                ! storing in pu reconstruction is curvature checks are met
-   !                principal_curvatures = getPrincipalCurvatures(puinterface(i,j,k))
-   !                if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
-   !                   call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-   !                end if
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(pu_neighborhood)
-   !             end if
-            
-   !          end do
-   !       end do         
-   !    end do
-
-   !    ! super cell check (pu clean up)
-   !    ! do k=this%cfg%kmin_,this%cfg%kmax_
-   !    !    do j=this%cfg%jmin_,this%cfg%jmax_
-   !    !       do i=this%cfg%imin_,this%cfg%imax_
-   !    !          if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !    !             volume_supercell = 0.0_WP
-   !    !             do kk=k-1,k+1
-   !    !                do jj=j-1,j+1
-   !    !                   do ii=i-1,i+1
-   !    !                      volume_supercell = volume_supercell + this%VF(ii,jj,kk)
-   !    !                   end do
-   !    !                end do
-   !    !             end do
-   !    !             if (this%VF(i,j,k).lt.0.01_WP.and.volume_supercell.lt.0.1_WP) then
-   !    !                call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-   !    !             end if
-   !    !          end if
-   !    !       end do
-   !    !    end do
-   !    ! end do
-
-
-   !    !final interfaces      
-   !    do k=this%cfg%kmino_,this%cfg%kmaxo_
-   !       do j=this%cfg%jmino_,this%cfg%jmaxo_
-   !          do i=this%cfg%imino_,this%cfg%imaxo_
-   !             call copy(this%liquid_gas_interface(i,j,k),puinterface(i,j,k))
-   !          end do
-   !       end do
-   !    end do
-
-      
-   !    ! Synchronize across boundaries
-   !    call this%sync_interface()
-      
-   ! end subroutine build_PUppic
-
-   subroutine build_PUppic(this)
-      use mathtools, only: normalize,Pi
-      implicit none
-      class(vfs), intent(inout) :: this
-      integer(IRL_SignedIndex_t) :: i,j,k
-      integer :: ind,ii,jj,kk,icenter
-      type(JibbenNeigh_type) :: jibben_neighborhood
-      type(PUNeigh_type) :: pu_neighborhood
-      type(RectCub_type) :: cell
-      logical :: found_center
-      type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: jibbeninterface, puinterface, puneighborhoodinterface
-      type(ObjServer_SeparatorVariant_type)  :: jibbeninterface_allocation, puinterface_allocation, puneighborhoodinterface_allocation
-      integer(IRL_LargeOffsetIndex_t) :: total_cells
-      real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, volume_supercell
-      real(IRL_double), dimension(3) :: normal, centroid
-      
-      ! Storage for a cell
-      call new(cell)
-
-      ! jibben and pu neighborhood
-      call new(jibben_neighborhood)
-      call reserve(jibben_neighborhood, 27)
-      call new(pu_neighborhood)
-      call reserve(pu_neighborhood, 27)
-
-      ! allocation for interfaces
-      allocate(jibbeninterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(puinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      allocate(puneighborhoodinterface(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-      total_cells=int(this%cfg%nxo_,8)*int(this%cfg%nyo_,8)*int(this%cfg%nzo_,8)
-      call new(jibbeninterface_allocation,total_cells)
-      call new(puinterface_allocation,total_cells)
-      call new(puneighborhoodinterface_allocation,total_cells)
-
-      ! storing PLIC interfaces first
-      do k=this%cfg%kmino_,this%cfg%kmaxo_
-        do j=this%cfg%jmino_,this%cfg%jmaxo_
-           do i=this%cfg%imino_,this%cfg%imaxo_
-               call new(jibbeninterface(i,j,k),jibbeninterface_allocation)
-               call new(puinterface(i,j,k),puinterface_allocation)
-               call new(puneighborhoodinterface(i,j,k),puneighborhoodinterface_allocation)
-               call copy(jibbeninterface(i,j,k),this%liquid_gas_interface(i,j,k))
-               call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-               call copy(puneighborhoodinterface(i,j,k),this%liquid_gas_interface(i,j,k))
-            end do
-         end do
-      end do
-
-      ! First, Jibben reconstruction =====================================================
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-
-            ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-               if (this%mask(i,j,k).ne.0) cycle
-               
-               ! Handle full cells differently
-               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-                  cycle
-               end if
-
-               ! Filling up jibben neighborhood
-               call setSize(jibben_neighborhood, 0)
-               ind=0
-               found_center=.false.
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
-                        ! Add cell to neighborhood
-                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-                           call addMember(jibben_neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
-                           ! Trap and set stencil center
-                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-                              icenter=ind
-                              found_center=.true.
-                              call setCenterOfStencil(jibben_neighborhood,icenter)
-                           end if
-                           ! Increment counter
-                           ind=ind+1
-                        end if
-                     end do
-                  end do
-               end do
-               if (ind.gt.0.and.found_center) then
-                  ! Localize jibben neighborhood
-                  call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
-                  call localize(jibben_neighborhood)
-   
-                  ! Jibben squared volume reconstruction
-                  call reconstructJibbenSq3D(jibben_neighborhood,jibbeninterface(i,j,k))
-                  
-                  ! Match Jibben parbolic reconstruction to volume fraction
-                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-                  call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
-
-                  ! storing in pu reconstruction is curvature checks are met
-                  principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
-                  if (abs(principal_curvatures(1)).le.(1.0_WP/this%cfg%meshsize(i, j, k)).and.abs(principal_curvatures(2)).le.(1.0_WP/this%cfg%meshsize(i, j, k))) then
-                     call copy(puneighborhoodinterface(i,j,k),jibbeninterface(i,j,k))
-                  end if
-
-                  ! Clean up neighborhood
-                  call emptyNeighborhood(jibben_neighborhood)
-               end if
-            
-            end do
-         end do         
-      end do
-
-      ! Second, PU reconstruction =====================================================
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-
-            ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-               if (this%mask(i,j,k).ne.0) cycle
-               
-               ! Handle full cells differently
-               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-                  call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-                  call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-                  cycle
-               end if
-
-               ! Filling up pu neighborhood
-               call setSize(pu_neighborhood, 0)
-               ind=0
-               found_center=.false.
-               do kk=k-1,k+1
-                  do jj=j-1,j+1
-                     do ii=i-1,i+1
-                        ! Add cell to neighborhood
-                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-                           centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
-                           area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/(this%cfg%meshsize(i,j,k)**2)
-                           vfrac_weight = 1.0_WP
-                           if (this%VF(ii,jj,kk).lt.0.1_WP) then
-                              vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * this%VF(ii,jj,kk))
-                           else if (this%VF(ii,jj,kk).gt.0.9_WP) then
-                              vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
-                           end if
-                           call addMember(pu_neighborhood,puneighborhoodinterface(ii,jj,kk),centroid,area_weight*vfrac_weight)
-                           ! Trap and set stencil center
-                           if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-                              icenter=ind
-                              found_center=.true.
-                              call setCenterOfStencil(pu_neighborhood,icenter)
-                           end if
-                           ! Increment counter
-                           ind=ind+1
-                        end if
-                     end do
-                  end do
-               end do
-               if (ind.gt.0.and.found_center) then
-                  delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
-   
-                  ! PU reconstruction
-                  call reconstructPU3D(pu_neighborhood,delta,this%cfg%meshsize(i,j,k),puinterface(i,j,k))
-
-                  ! checking curvature
-                  principal_curvatures = getPrincipalCurvatures(puinterface(i,j,k))
-                  if (abs(principal_curvatures(1)).ge.(4.0_WP/this%cfg%meshsize(i, j, k)).or.abs(principal_curvatures(2)).ge.(4.0_WP/this%cfg%meshsize(i, j, k))) then
-                     call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-                     call emptyNeighborhood(pu_neighborhood)
-                     cycle
-                  end if
-
-                  ! Match PU parbolic reconstruction to volume fraction
-                  call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-                  call matchVolumeFraction(cell,this%VF(i,j,k),puinterface(i,j,k))
-
-                  ! If volume matching did not work, replace by plane
-                  call getNormMoments(cell,puinterface(i,j,k),vfrac)
-                  vfrac = vfrac/this%cfg%vol(i,j,k)
-                  if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
-                     call copy(puinterface(i,j,k), this%liquid_gas_interface(i,j,k))
-                     cycle
-                  end if
-
-                  ! Clean up neighborhood
-                  call emptyNeighborhood(pu_neighborhood)
-               end if
-            
-            end do
-         end do         
-      end do
-
-      ! super cell check (pu clean up)
-      do k=this%cfg%kmin_,this%cfg%kmax_
-         do j=this%cfg%jmin_,this%cfg%jmax_
-            do i=this%cfg%imin_,this%cfg%imax_
-               if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-                  volume_supercell = 0.0_WP
-                  do kk=k-1,k+1
-                     do jj=j-1,j+1
-                        do ii=i-1,i+1
-                           volume_supercell = volume_supercell + this%VF(ii,jj,kk)
-                        end do
-                     end do
-                  end do
-                  if (this%VF(i,j,k).lt.0.01_WP.and.volume_supercell.lt.0.1_WP) then
-                     call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
-                  end if
-               end if
-            end do
-         end do
-      end do
-
-
-      !final interfaces      
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_,this%cfg%jmaxo_
             do i=this%cfg%imino_,this%cfg%imaxo_
@@ -5597,7 +4749,6 @@ contains
          end do
       end do
 
-      
       ! Synchronize across boundaries
       call this%sync_interface()
       
