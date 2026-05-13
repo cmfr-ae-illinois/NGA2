@@ -501,7 +501,7 @@ contains
          filename='data/data.'
          write(filename(len_trim(filename)+1:len_trim(filename)+6),'(i6.6)') n
          filename=trim(filename)//'.vtr'
-         write(iunit,'(a,es12.5,a)') idt//idt//'<DataSet timestep="',this%time(n),'" file="'//trim(filename)//'"/>'
+         write(iunit,'(a,es0.5,a)') idt//idt//'<DataSet timestep="',this%time(n),'" file="'//trim(filename)//'"/>'
       end do
       write(iunit,'(a)')   idt//'</Collection>'
       write(iunit,'(a)')   '</VTKFile>'
