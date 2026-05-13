@@ -218,14 +218,17 @@ subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
                 H_upx=this%H(i,j,k)
                 H_upy=this%H(i,j,k)
                 H_upz=this%H(i,j,k)
-                diff_x=0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%diff(i+this%stp1:i+this%stp2,j,k)) &
-                &     +0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%diff(i+this%stm1:i+this%stm2,j,k));
+                diff_x=sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k))
+                ! 0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%diff(i+this%stp1:i+this%stp2,j,k)) &
+                ! &     +0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%diff(i+this%stm1:i+this%stm2,j,k));
 
-                diff_y=0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stp1:j+this%stp2,k)) &
-                &     +0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stm1:j+this%stm2,k)) ;
+                diff_y=sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k))
+                ! 0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stp1:j+this%stp2,k)) &
+                ! &     +0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stm1:j+this%stm2,k)) ;
 
-                diff_z=0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stp1:k+this%stp2)) &
-                &     +0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stm1:k+this%stm2));
+                diff_z=sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k))
+                ! 0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stp1:k+this%stp2)) &
+                ! &     +0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stm1:k+this%stm2));
 
                 ! Fluxes on x-face
                 FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%H(i+this%stp1:i+this%stp2,j,k)) &
