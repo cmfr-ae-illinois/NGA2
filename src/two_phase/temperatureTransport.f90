@@ -60,6 +60,8 @@ module temp_transport
         real(WP), dimension(:,:,:), allocatable :: H                        !< Temperature array
         real(WP), dimension(:,:,:), allocatable :: Hold                     !< Old Temperature Array
         real(WP), dimension(:,:,:), allocatable :: diff                     ! Holds Conduction values
+        real(WP), dimension(:,:,:), allocatable :: cp                   !< Holds value of rho_cp    
+        real(WP), dimension(:,:,:), allocatable :: rho                   !< Holds value of rho_cp
         real(WP), dimension(:,:,:), allocatable :: rho_cp                   !< Holds value of rho_cp
         ! Fluid Properties
         real(WP) :: rho1, rho2
@@ -76,6 +78,7 @@ module temp_transport
         procedure :: add_bcond
         procedure :: apply_bcond
         procedure :: get_dHdt
+        procedure :: get_dHdt_SL
         procedure :: solve_implicit
         procedure :: populate_temperature
         procedure :: populate_enthalpy
@@ -144,6 +147,8 @@ subroutine init(this,fs_in,vf_in,time_in)
 
     allocate(this%diff(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(this%rho_cp(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%cp(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%rho(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     ! Update Init
     this%initialized = .true.
 end subroutine init 
@@ -180,13 +185,13 @@ subroutine apply_bcond(this,t,dt)
     
 end subroutine apply_bcond
 
-subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
+subroutine get_dHdt(this,dHdt ,U,V,W)
     implicit none
     class(tads), intent(inout) :: this
     real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(out) :: dHdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: rhoU     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: rhoV     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: rhoW     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
     real(WP) :: H_upx,H_upy,H_upz,diff_x,diff_y,diff_z,U_upx,U_upy,U_upz,Ux,Uy,Uz
     integer :: i,j,k
@@ -195,16 +200,20 @@ subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
     this%nst=1
     this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
     this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
-    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_+1
-        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
-            do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
-                this%diff(i,j,k) = this%vf%VF(i,j,k)*this%k1 + (1-this%vf%VF(i,j,k)) *this%k2 ! Linear on VF
-                ! this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%k1 + (1.0_WP-this%vf%VF(i,j,k))/this%k2) ! Harmoinc on VF
-                this%rho_cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+    do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_+1
+        do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_+1
+            do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_+1
+                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%k1 + (1-this%vf%VF(i,j,k)) *this%k2 ! Linear on VF
+                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%k1 + (1.0_WP-this%vf%VF(i,j,k))/this%k2) ! Harmoinc on VF
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
+                this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)                
             end do
         end do
     end do
 
+    call this%fs%cfg%sync(this%diff)
+    call this%fs%cfg%sync(this%cp)
 
     allocate(FX(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(FY(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
@@ -219,32 +228,35 @@ subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
                 H_upy=this%H(i,j,k)
                 H_upz=this%H(i,j,k)
                 diff_x=sum(this%itp_x(:,i,j,k)*this%diff(i-1:i,j,k))
-                ! 0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%diff(i+this%stp1:i+this%stp2,j,k)) &
-                ! &     +0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%diff(i+this%stm1:i+this%stm2,j,k));
 
                 diff_y=sum(this%itp_y(:,i,j,k)*this%diff(i,j-1:j,k))
-                ! 0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stp1:j+this%stp2,k)) &
-                ! &     +0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%diff(i,j+this%stm1:j+this%stm2,k)) ;
 
                 diff_z=sum(this%itp_z(:,i,j,k)*this%diff(i,j,k-1:k))
-                ! 0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stp1:k+this%stp2)) &
-                ! &     +0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%diff(i,j,k+this%stm1:k+this%stm2));
-
+                
                 ! Fluxes on x-face
-                FX(i,j,k)=-0.5_WP*(rhoU(i,j,k)+abs(rhoU(i,j,k)))*sum(this%H(i+this%stp1:i+this%stp2,j,k)) &
-                &         -0.5_WP*(rhoU(i,j,k)-abs(rhoU(i,j,k)))*sum(this%H(i+this%stm1:i+this%stm2,j,k)) &
-                &         +diff_x*sum(this%grd_x(:,i,j,k)*this%H(i-1:i,j,k))
+                FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*sum(this%H(i+this%stp1:i+this%stp2,j,k)) &
+                &         -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*sum(this%H(i+this%stm1:i+this%stm2,j,k)) &
+                &         +diff_x*sum(this%grd_x(:,i,j,k)*(this%H(i-1:i,j,k)/this%cp(i-1:i,j,k)))
                 ! Fluxes on y-face
-                FY(i,j,k)=-0.5_WP*(rhoV(i,j,k)+abs(rhoV(i,j,k)))*sum(this%H(i,j+this%stp1:j+this%stp2,k)) &
-                &         -0.5_WP*(rhoV(i,j,k)-abs(rhoV(i,j,k)))*sum(this%H(i,j+this%stm1:j+this%stm2,k)) &
-                &         +diff_y*sum(this%grd_y(:,i,j,k)*this%H(i,j-1:j,k))
+                FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*sum(this%H(i,j+this%stp1:j+this%stp2,k)) &
+                &         -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*sum(this%H(i,j+this%stm1:j+this%stm2,k)) &
+                &         +diff_y*sum(this%grd_y(:,i,j,k)*(this%H(i,j-1:j,k)/this%cp(i,j-1:j,k)))
                 ! Fluxes on z-face
-                FZ(i,j,k)=-0.5_WP*(rhoW(i,j,k)+abs(rhoW(i,j,k)))*sum(this%H(i,j,k+this%stp1:k+this%stp2)) &
-                &         -0.5_WP*(rhoW(i,j,k)-abs(rhoW(i,j,k)))*sum(this%H(i,j,k+this%stm1:k+this%stm2)) &
-                &         +diff_z*sum(this%grd_z(:,i,j,k)*this%H(i,j,k-1:k))
+                FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*sum(this%H(i,j,k+this%stp1:k+this%stp2)) &
+                &         -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%H(i,j,k+this%stm1:k+this%stm2)) &
+                &         +diff_z*sum(this%grd_z(:,i,j,k)*(this%H(i,j,k-1:k)/this%rho_cp(i,j,k-1:k)))
+
+                ! Semi Lagrangian Attempts
+
+
             end do
         end do
     end do
+
+    call this%fs%cfg%sync(FX)
+    call this%fs%cfg%sync(FY)
+    call this%fs%cfg%sync(FZ)
+
     ! Time derivative of rhoSC
     do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
@@ -256,6 +268,242 @@ subroutine get_dHdt(this,dHdt ,rhoU,rhoV,rhoW)
         end do
     end do
 end subroutine get_dHdt
+
+subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
+    use irl_fortran_interface
+    implicit none
+    class(tads), intent(inout) :: this
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(out) :: dHdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    type(TagAccVM_SepVM_type), dimension(1:,this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:) :: detailed_face_flux !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
+    real(WP) :: H_upx,H_upy,H_upz,diff_x,diff_y,diff_z,U_upx,U_upy,U_upz,Ux,Uy,Uz
+    real(WP) :: my_vol
+    type(SepVM_type) :: my_SepVM
+    integer, dimension(3) :: ind
+    integer :: i,j,k,n
+    real(WP), intent(in) :: dt  !< This is the time step size that was used to generate the detailed_face_flux geometric data
+    
+    ! print*, "Start"
+    ! detailed_face_flux = this%vf%detailed_face_flux
+    ! Testing Quick Scheme
+    this%nst=1
+    this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
+    this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
+    do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_+1
+        do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_+1
+            do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_+1
+                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%k1 + (1-this%vf%VF(i,j,k)) *this%k2 ! Linear on VF
+                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%k1 + (1.0_WP-this%vf%VF(i,j,k))/this%k2) ! Harmoinc on VF
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
+                this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)
+            end do
+        end do
+    end do
+    ! print *, "Props"
+
+    ! Calculate minmod-limited gradient of SC everywhere
+    ! do k=this%cfg%kmino_+1,this%cfg%kmaxo_-1
+    !     do j=this%cfg%jmino_+1,this%cfg%jmaxo_-1
+    !         do i=this%cfg%imino_+1,this%cfg%imaxo_-1
+    !             ! No need to calculate gradient inside of wall cell
+    !             if (this%mask(i,j,k).eq.1) cycle
+    !             ! Get gradient
+    !             grad(1,i,j,k)=minmod((this%H(i+1,j,k,nsc)-this%H(i,j,k,nsc))*this%cfg%dxmi(i+1),(this%H(i,j,k,nsc)-this%H(i-1,j,k,nsc))*this%cfg%dxmi(i))
+    !             grad(2,i,j,k)=minmod((this%H(i,j+1,k,nsc)-this%H(i,j,k,nsc))*this%cfg%dymi(j+1),(this%H(i,j,k,nsc)-this%H(i,j-1,k,nsc))*this%cfg%dymi(j))
+    !             grad(3,i,j,k)=minmod((this%H(i,j,k+1,nsc)-this%H(i,j,k,nsc))*this%cfg%dzmi(k+1),(this%H(i,j,k,nsc)-this%H(i,j,k-1,nsc))*this%cfg%dzmi(k))
+    !         end do
+    !     end do
+    ! end do
+        
+    call this%fs%cfg%sync(this%diff)
+    call this%fs%cfg%sync(this%cp)
+
+    allocate(FX(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(FY(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(FZ(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    ! print*, "Entering Advection Loop"
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_+1
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
+                ! Semi Lagrangian Fluxes
+                ! Advective Fluxes\
+                ! Flux on x-face
+                ! print*, "If X"
+                if (getSize(detailed_face_flux(1,i,j,k)).gt.0) then
+                    ! print *, "size gotten"
+                    ! Detailed geometric flux is available, use geometric fluxing
+                    do n=0,getSize(detailed_face_flux(1,i,j,k))-1
+                        ! Get cell index for nth object
+                        print*, "ind X"
+                        ind=this%fs%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(1,i,j,k),n))
+                        ! Get SepVM for nth object
+                        ! print*, "SepVM X"
+                        call getSepVMAtIndex(detailed_face_flux(1,i,j,k),n,my_SepVM)
+
+                        ! Extract volume for first phase (0 is liquid, 1 is gas)\
+                        ! print*, "vol1 X"
+                        my_vol=getVolume(my_SepVM,0)
+                        ! Increment flux with first order estimate
+                        ! print*, "Fx1 X"
+                        FX(i,j,k)=FX(i,j,k)+my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+
+                        ! Extract volume for second phase
+                        ! print*, "vol2 X"
+                        my_vol=getVolume(my_SepVm,1)
+                        ! Increment flux with first order estimate
+                        ! print*, "Fx2 X"
+                        FX(i,j,k)=FX(i,j,k)+my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
+                        ! Second order correction
+                        !my_bar=getCentroid(my_SepVM,this%phase(nsc))
+                        !FX(i,j,k)=FX(i,j,k)-my_vol*(sum(grad(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
+                    end do
+                    ! Scale by cell face area and time step size
+                    FX(i,j,k)=FX(i,j,k)/(dt*this%fs%cfg%dy(j)*this%fs%cfg%dz(k))
+                else
+                    ! No detailed geometric flux is available, use upwind flux
+                    ! print*, "Upwind X" 
+                    FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*sum(this%H(i+this%stp1:i+this%stp2,j,k)) &
+                    &         -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*sum(this%H(i+this%stm1:i+this%stm2,j,k))
+
+                    ! SCm=0.0_WP; if (VFold(i-1,j,k).ne.real(this%phase(nsc),WP)) SCm=this%SC(i-1,j,k,nsc)+0.5_WP*grad(1,i-1,j,k)*this%cfg%dx(i-1)
+                    !  SCp=0.0_WP; if (VFold(i  ,j,k).ne.real(this%phase(nsc),WP)) SCp=this%SC(i  ,j,k,nsc)-0.5_WP*grad(1,i  ,j,k)*this%cfg%dx(i  )
+                    !  FX(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*SCm-0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*SCp
+                end if
+                ! print*, "IF Y"
+                ! Flux on y-face
+                if (getSize(detailed_face_flux(2,i,j,k)).gt.0) then
+                    ! Detailed geometric flux is available, use geometric fluxing
+                    do n=0,getSize(detailed_face_flux(2,i,j,k))-1
+                        ! Get cell index for nth object
+                        print*, "ind Y"
+                        ind=this%fs%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(2,i,j,k),n))
+                        ! Get SepVM for nth object
+                        ! print*, "SepVm Y"
+                        call getSepVMAtIndex(detailed_face_flux(2,i,j,k),n,my_SepVM)
+
+                        ! Extract volume for relevant phase
+                        ! print*, "Vol1 Y"
+                        my_vol=getVolume(my_SepVM,0)
+                        ! Increment flux with first order estimate
+                        ! print*, "Fy1 Y"
+                        FY(i,j,k)=FY(i,j,k)+my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+
+                        ! Extract volume for relevant phase
+                        ! print*, "Vol2 Y"
+                        my_vol=getVolume(my_SepVM,1)
+                        ! Increment flux with first order estimate
+                        ! print*, "Fy2 Y"
+                        FY(i,j,k)=FY(i,j,k)+my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
+
+                        
+                        ! Second order correction
+                        !my_bar=getCentroid(my_SepVM,this%phase(nsc))
+                        !FY(i,j,k)=FY(i,j,k)-my_vol*(sum(grad(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
+                    end do
+                    ! Scale by cell face area and time step size
+                    FY(i,j,k)=FY(i,j,k)/(dt*this%fs%cfg%dx(i)*this%fs%cfg%dz(k))
+                else
+                    ! No detailed geometric flux is available, use upwind flux
+                    ! print*, "Upwind Y"
+                    FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*sum(this%H(i,j+this%stp1:j+this%stp2,k)) &
+                    &         -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*sum(this%H(i,j+this%stm1:j+this%stm2,k))
+
+                    ! SCm=0.0_WP; if (VFold(i,j-1,k).ne.real(this%phase(nsc),WP)) SCm=this%SC(i,j-1,k,nsc)+0.5_WP*grad(2,i,j-1,k)*this%cfg%dy(j-1)
+                    !  SCp=0.0_WP; if (VFold(i,j  ,k).ne.real(this%phase(nsc),WP)) SCp=this%SC(i,j  ,k,nsc)-0.5_WP*grad(2,i,j  ,k)*this%cfg%dy(j  )
+                    !  FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*SCm-0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*SCp
+                end if
+
+                ! print*, "IF Z"
+                ! Flux on z-face
+                if (getSize(detailed_face_flux(3,i,j,k)).gt.0) then
+                    ! Detailed geometric flux is available, use geometric fluxing
+                    do n=0,getSize(detailed_face_flux(3,i,j,k))-1
+                        ! Get cell index for nth object
+                        print*, "ind Z"
+                        ind=this%fs%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(3,i,j,k),n))
+                        ! Get SepVM for nth object
+                        ! print*, "SepVm Z"
+                        call getSepVMAtIndex(detailed_face_flux(3,i,j,k),n,my_SepVM)
+
+                        ! Extract volume for relevant phase
+                        ! print*, "Vol1  Z"
+                        my_vol=getVolume(my_SepVM,0)
+                        ! Increment flux with first order estimate
+                        ! print*, "FZ1"
+                        FZ(i,j,k)=FZ(i,j,k)+my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+
+                        ! Extract volume for relevant phase
+                        ! print*, "Vol2 Z"
+                        my_vol=getVolume(my_SepVM,1)
+                        ! Increment flux with first order estimate
+                        ! print*, "FZ2"
+                        FZ(i,j,k)=FZ(i,j,k)+my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
+
+
+                        ! Second order correction, only one phase
+                        !my_bar=getCentroid(my_SepVM,this%phase(nsc))
+                        !FZ(i,j,k)=FZ(i,j,k)-my_vol*(sum(grad(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
+                    end do
+                    ! Scale by cell face area and time step size
+                    FZ(i,j,k)=FZ(i,j,k)/(dt*this%fs%cfg%dx(i)*this%fs%cfg%dy(j))
+                else
+                    ! No detailed geometric flux is available, use upwind flux
+                    FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*sum(this%H(i,j,k+this%stp1:k+this%stp2)) &
+                    &         -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%H(i,j,k+this%stm1:k+this%stm2))
+
+                    ! SCm=0.0_WP; if (VFold(i,j,k-1).ne.real(this%phase(nsc),WP)) SCm=this%SC(i,j,k-1,nsc)+0.5_WP*grad(3,i,j,k-1)*this%cfg%dz(k-1)
+                    !  SCp=0.0_WP; if (VFold(i,j,k  ).ne.real(this%phase(nsc),WP)) SCp=this%SC(i,j,k  ,nsc)-0.5_WP*grad(3,i,j,k  )*this%cfg%dz(k  )
+                    !  FZ(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*SCm-0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*SCp
+                end if
+                ! print*, "endif"
+                ! Diffusive Fluxes
+                
+                
+            end do
+        end do
+    end do
+    ! print*, "Exit Advection Loop"
+    ! print*, "Sync"
+    call this%fs%cfg%sync(FX)
+    call this%fs%cfg%sync(FY)
+    call this%fs%cfg%sync(FZ)
+    ! print*, "Divp"
+    ! Time derivative of rhoSC
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                dHdt(i,j,k)=sum(this%fs%divp_x(:,i,j,k)*FX(i:i+1,j,k))+&
+                &           sum(this%fs%divp_y(:,i,j,k)*FY(i,j:j+1,k))+&
+                &           sum(this%fs%divp_z(:,i,j,k)*FZ(i,j,k:k+1))
+            end do
+        end do
+    end do
+    ! print*, "End"
+    contains
+      
+      !> Minmod gradient
+      function minmod(g1,g2) result(g)
+         implicit none
+         real(WP), intent(in) :: g1,g2
+         real(WP) :: g
+         if (g1*g2.le.0.0_WP) then
+            g=0.0_WP
+         else
+            if (abs(g1).lt.abs(g2)) then
+               g=g1
+            else
+               g=g2
+            end if
+         end if
+      end function minmod
+
+end subroutine get_dHdt_SL
+
+
 
 subroutine solve_implicit(this,dt,resH,rhoU,rhoV,rhoW)
     implicit none
@@ -337,7 +585,9 @@ subroutine populate_temperature(this)
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
                 ! Update rho*cp
-                this%rho_cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
+                this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)
                 ! Get T
                 this%T(i,j,k) = this%H(i,j,k) / this%rho_cp(i,j,k)
             end do
@@ -354,8 +604,10 @@ subroutine populate_enthalpy(this)
     do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_+1
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
-                ! Update rho*cp ! (this%vf%VF(i,j,k)*this%rho1 + (1-this%vf%VF(i,j,k))*this%rho2)* &
-                this%rho_cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                ! Update rho_cp
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
+                this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)
                 ! Get T
                 this%H(i,j,k) = this%T(i,j,k) * this%rho_cp(i,j,k)
             end do
