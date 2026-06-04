@@ -338,7 +338,7 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                     ! Detailed geometric flux is available, use geometric fluxing
                     do n=0,getSize(detailed_face_flux(1,i,j,k))-1
                         ! Get cell index for nth object
-                        print*, "ind X"
+                        ! print*, "ind X"
                         ind=this%fs%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(1,i,j,k),n))
                         ! Get SepVM for nth object
                         ! print*, "SepVM X"
@@ -349,14 +349,14 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                         my_vol=getVolume(my_SepVM,0)
                         ! Increment flux with first order estimate
                         ! print*, "Fx1 X"
-                        FX(i,j,k)=FX(i,j,k)+my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+                        FX(i,j,k)=FX(i,j,k)-my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
 
                         ! Extract volume for second phase
                         ! print*, "vol2 X"
                         my_vol=getVolume(my_SepVm,1)
                         ! Increment flux with first order estimate
                         ! print*, "Fx2 X"
-                        FX(i,j,k)=FX(i,j,k)+my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
+                        FX(i,j,k)=FX(i,j,k)-my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
                         ! Second order correction
                         !my_bar=getCentroid(my_SepVM,this%phase(nsc))
                         !FX(i,j,k)=FX(i,j,k)-my_vol*(sum(grad(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
@@ -379,7 +379,7 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                     ! Detailed geometric flux is available, use geometric fluxing
                     do n=0,getSize(detailed_face_flux(2,i,j,k))-1
                         ! Get cell index for nth object
-                        print*, "ind Y"
+                        ! print*, "ind Y"
                         ind=this%fs%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(2,i,j,k),n))
                         ! Get SepVM for nth object
                         ! print*, "SepVm Y"
@@ -390,14 +390,14 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                         my_vol=getVolume(my_SepVM,0)
                         ! Increment flux with first order estimate
                         ! print*, "Fy1 Y"
-                        FY(i,j,k)=FY(i,j,k)+my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+                        FY(i,j,k)=FY(i,j,k)-my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
 
                         ! Extract volume for relevant phase
                         ! print*, "Vol2 Y"
                         my_vol=getVolume(my_SepVM,1)
                         ! Increment flux with first order estimate
                         ! print*, "Fy2 Y"
-                        FY(i,j,k)=FY(i,j,k)+my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
+                        FY(i,j,k)=FY(i,j,k)-my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
 
                         
                         ! Second order correction
@@ -423,7 +423,7 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                     ! Detailed geometric flux is available, use geometric fluxing
                     do n=0,getSize(detailed_face_flux(3,i,j,k))-1
                         ! Get cell index for nth object
-                        print*, "ind Z"
+                        ! print*, "ind Z"
                         ind=this%fs%cfg%get_ijk_from_lexico(getTagForIndex(detailed_face_flux(3,i,j,k),n))
                         ! Get SepVM for nth object
                         ! print*, "SepVm Z"
@@ -434,14 +434,14 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                         my_vol=getVolume(my_SepVM,0)
                         ! Increment flux with first order estimate
                         ! print*, "FZ1"
-                        FZ(i,j,k)=FZ(i,j,k)+my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+                        FZ(i,j,k)=FZ(i,j,k)-my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
 
                         ! Extract volume for relevant phase
                         ! print*, "Vol2 Z"
                         my_vol=getVolume(my_SepVM,1)
                         ! Increment flux with first order estimate
                         ! print*, "FZ2"
-                        FZ(i,j,k)=FZ(i,j,k)+my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
+                        FZ(i,j,k)=FZ(i,j,k)-my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
 
 
                         ! Second order correction, only one phase
