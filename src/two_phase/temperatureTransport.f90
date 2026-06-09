@@ -63,10 +63,16 @@ module temp_transport
         real(WP), dimension(:,:,:), allocatable :: cp                   !< Holds value of rho_cp    
         real(WP), dimension(:,:,:), allocatable :: rho                   !< Holds value of rho_cp
         real(WP), dimension(:,:,:), allocatable :: rho_cp                   !< Holds value of rho_cp
+        ! Palmore Arrays
+        real(WP), dimension(:,:,:), allocatable :: TG,TGold,TGExtrap !< Holds Gas Temperature Field
+        real(WP), dimension(:,:,:), allocatable :: TL,TLold,TLExtrap !< Holds Liquid Temperature Field
+        real(WP), dimension(:,:,:), allocatable :: TPmix !< Holds Liquid Temperature Field
+        real(WP), dimension(:,:,:), allocatable :: uG !< Holds Gas Velocity Field
+        real(WP), dimension(:,:,:), allocatable :: uL !< Holds Liquid Velocity Field
         ! Fluid Properties
-        real(WP) :: rho1, rho2
-        real(WP) :: cp1, cp2
-        real(WP) :: k1, k2
+        real(WP) :: rhoL, rhoG
+        real(WP) :: cpL, cpG
+        real(WP) :: kL, kG
         ! Implicit Scalar solver
         class(linsol), pointer :: implicit   !< Iterative linear solver object for an implicit prediction of the scalar residual
         ! Initialized Boolean
@@ -83,6 +89,11 @@ module temp_transport
         procedure :: populate_temperature
         procedure :: populate_enthalpy
         ! Private Methods
+        procedure :: populate_palmore_arrays
+        procedure :: extrapolate_fields_palmore
+        procedure :: step_temperature_palmore
+        procedure :: mix_temperature_palmore
+        procedure :: compute_Aslam_RHS
     end type tads
 contains
 ! Method Implementations here
@@ -149,6 +160,16 @@ subroutine init(this,fs_in,vf_in,time_in)
     allocate(this%rho_cp(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(this%cp(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(this%rho(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+
+    allocate(this%TG(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%TGold(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%TGExtrap(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%TL(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%TLold(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%TLExtrap(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%uG(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%uL(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%TPmix(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     ! Update Init
     this%initialized = .true.
 end subroutine init 
@@ -203,9 +224,9 @@ subroutine get_dHdt(this,dHdt ,U,V,W)
     do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_+1
         do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_+1
             do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_+1
-                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%k1 + (1-this%vf%VF(i,j,k)) *this%k2 ! Linear on VF
-                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%k1 + (1.0_WP-this%vf%VF(i,j,k))/this%k2) ! Harmoinc on VF
-                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%kL + (1-this%vf%VF(i,j,k)) *this%kG ! Linear on VF
+                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%kL + (1.0_WP-this%vf%VF(i,j,k))/this%kG) ! Harmoinc on VF
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cpL + (1.0_WP-this%vf%VF(i,j,k))*this%cpG)
                 this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
                 this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)                
             end do
@@ -280,7 +301,7 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
     type(TagAccVM_SepVM_type), dimension(1:,this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:) :: detailed_face_flux !< Needs to be (1:3,imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), dimension(:,:,:), allocatable :: FX,FY,FZ
     real(WP) :: H_upx,H_upy,H_upz,diff_x,diff_y,diff_z,U_upx,U_upy,U_upz,Ux,Uy,Uz
-    real(WP) :: my_vol
+    real(WP) :: my_vol,my_vol1,my_vol2
     type(SepVM_type) :: my_SepVM
     integer, dimension(3) :: ind
     integer :: i,j,k,n
@@ -295,9 +316,9 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
     do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_+1
         do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_+1
             do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_+1
-                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%k1 + (1-this%vf%VF(i,j,k)) *this%k2 ! Linear on VF
-                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%k1 + (1.0_WP-this%vf%VF(i,j,k))/this%k2) ! Harmoinc on VF
-                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%kL + (1-this%vf%VF(i,j,k)) *this%kG ! Linear on VF
+                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%kL + (1.0_WP-this%vf%VF(i,j,k))/this%kG) ! Harmoinc on VF
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cpL + (1.0_WP-this%vf%VF(i,j,k))*this%cpG)
                 this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
                 this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)
             end do
@@ -346,17 +367,17 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
 
                         ! Extract volume for first phase (0 is liquid, 1 is gas)\
                         ! print*, "vol1 X"
-                        my_vol=getVolume(my_SepVM,0)
+                        my_vol1=getVolume(my_SepVM,0)
+                        my_vol2=getVolume(my_SepVM,1)
+                        my_vol = my_vol1+my_vol2
                         ! Increment flux with first order estimate
                         ! print*, "Fx1 X"
-                        FX(i,j,k)=FX(i,j,k)-my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+                        FX(i,j,k)=FX(i,j,k)-my_vol1*this%fs%rho_l*this%cpL*this%Told(ind(1),ind(2),ind(3))/(my_vol+1e-6)
 
-                        ! Extract volume for second phase
-                        ! print*, "vol2 X"
-                        my_vol=getVolume(my_SepVm,1)
                         ! Increment flux with first order estimate
                         ! print*, "Fx2 X"
-                        FX(i,j,k)=FX(i,j,k)-my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
+                        FX(i,j,k)=FX(i,j,k)-my_vol2*this%fs%rho_g*this%cpG*this%Told(ind(1),ind(2),ind(3))/(my_vol+1e-6)
+
                         ! Second order correction
                         !my_bar=getCentroid(my_SepVM,this%phase(nsc))
                         !FX(i,j,k)=FX(i,j,k)-my_vol*(sum(grad(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
@@ -387,19 +408,15 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
 
                         ! Extract volume for relevant phase
                         ! print*, "Vol1 Y"
-                        my_vol=getVolume(my_SepVM,0)
+                        my_vol1=getVolume(my_SepVM,0)
+                        my_vol2=getVolume(my_SepVM,1)
+                        my_vol = my_vol1+my_vol2
                         ! Increment flux with first order estimate
                         ! print*, "Fy1 Y"
-                        FY(i,j,k)=FY(i,j,k)-my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
-
-                        ! Extract volume for relevant phase
-                        ! print*, "Vol2 Y"
-                        my_vol=getVolume(my_SepVM,1)
+                        FY(i,j,k)=FY(i,j,k)-my_vol1*this%fs%rho_l*this%cpL*this%Told(ind(1),ind(2),ind(3))/(my_vol+1e-6)
                         ! Increment flux with first order estimate
                         ! print*, "Fy2 Y"
-                        FY(i,j,k)=FY(i,j,k)-my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
-
-                        
+                        FY(i,j,k)=FY(i,j,k)-my_vol2*this%fs%rho_g*this%cpG*this%Told(ind(1),ind(2),ind(3))/(my_vol+1e-6)
                         ! Second order correction
                         !my_bar=getCentroid(my_SepVM,this%phase(nsc))
                         !FY(i,j,k)=FY(i,j,k)-my_vol*(sum(grad(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
@@ -411,7 +428,7 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                     ! print*, "Upwind Y"
                     FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*sum(this%H(i,j+this%stp1:j+this%stp2,k)) &
                     &         -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*sum(this%H(i,j+this%stm1:j+this%stm2,k))
-
+                    
                     ! SCm=0.0_WP; if (VFold(i,j-1,k).ne.real(this%phase(nsc),WP)) SCm=this%SC(i,j-1,k,nsc)+0.5_WP*grad(2,i,j-1,k)*this%cfg%dy(j-1)
                     !  SCp=0.0_WP; if (VFold(i,j  ,k).ne.real(this%phase(nsc),WP)) SCp=this%SC(i,j  ,k,nsc)-0.5_WP*grad(2,i,j  ,k)*this%cfg%dy(j  )
                     !  FY(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*SCm-0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*SCp
@@ -431,19 +448,17 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
 
                         ! Extract volume for relevant phase
                         ! print*, "Vol1  Z"
-                        my_vol=getVolume(my_SepVM,0)
+                        my_vol1=getVolume(my_SepVM,0)
+                        my_vol2=getVolume(my_SepVM,1)
+                        my_vol = my_vol1+my_vol2
                         ! Increment flux with first order estimate
                         ! print*, "FZ1"
-                        FZ(i,j,k)=FZ(i,j,k)-my_vol*this%fs%rho_l*this%cp1*this%Told(ind(1),ind(2),ind(3))
+                        FZ(i,j,k)=FZ(i,j,k)-my_vol1*this%fs%rho_l*this%cpL*this%Told(ind(1),ind(2),ind(3))/(my_vol+1e-6)
 
-                        ! Extract volume for relevant phase
-                        ! print*, "Vol2 Z"
-                        my_vol=getVolume(my_SepVM,1)
                         ! Increment flux with first order estimate
                         ! print*, "FZ2"
-                        FZ(i,j,k)=FZ(i,j,k)-my_vol*this%fs%rho_g*this%cp2*this%Told(ind(1),ind(2),ind(3))
-
-
+                        FZ(i,j,k)=FZ(i,j,k)-my_vol2*this%fs%rho_g*this%cpG*this%Told(ind(1),ind(2),ind(3))/(my_vol+1e-6)
+                        
                         ! Second order correction, only one phase
                         !my_bar=getCentroid(my_SepVM,this%phase(nsc))
                         !FZ(i,j,k)=FZ(i,j,k)-my_vol*(sum(grad(:,ii,jj,kk)*my_bar(:)-my_barold(:)))
@@ -461,7 +476,10 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                 end if
                 ! print*, "endif"
                 ! Diffusive Fluxes
-                
+
+                ! FX(i,j,k) = FX(i,j,k) + diff_x*sum(this%grd_x(:,i,j,k)*(this%H(i-1:i,j,k)/this%cp(i-1:i,j,k)))
+                ! FY(i,j,k) = FY(i,j,k) + diff_y*sum(this%grd_y(:,i,j,k)*(this%H(i,j-1:j,k)/this%cp(i,j-1:j,k)))
+                ! FZ(i,j,k) = FZ(i,j,k) + diff_z*sum(this%grd_z(:,i,j,k)*(this%H(i,j,k-1:k)/this%rho_cp(i,j,k-1:k)))
                 
             end do
         end do
@@ -479,6 +497,10 @@ subroutine get_dHdt_SL(this,dHdt ,U,V,W,detailed_face_flux,dt)
                 dHdt(i,j,k)=sum(this%fs%divp_x(:,i,j,k)*FX(i:i+1,j,k))+&
                 &           sum(this%fs%divp_y(:,i,j,k)*FY(i,j:j+1,k))+&
                 &           sum(this%fs%divp_z(:,i,j,k)*FZ(i,j,k:k+1))
+
+                ! dHdt(i,j,k) = -FX(i+1,j,k)+FX(i,j,k)&
+                !              &-FY(i,j+1,k)+FY(i,j,k)&
+                !              &-FZ(i,j,k+1)+FZ(i,j,k)
             end do
         end do
     end do
@@ -585,7 +607,7 @@ subroutine populate_temperature(this)
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
                 ! Update rho*cp
-                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cpL + (1.0_WP-this%vf%VF(i,j,k))*this%cpG)
                 this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
                 this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)
                 ! Get T
@@ -605,7 +627,7 @@ subroutine populate_enthalpy(this)
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
                 ! Update rho_cp
-                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cp1 + (1.0_WP-this%vf%VF(i,j,k))*this%cp2)
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cpL + (1.0_WP-this%vf%VF(i,j,k))*this%cpG)
                 this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
                 this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)
                 ! Get T
@@ -615,5 +637,291 @@ subroutine populate_enthalpy(this)
     end do
 end subroutine populate_enthalpy
 
+
+
+! Palmore Functions
+subroutine populate_palmore_arrays(this)
+    implicit none
+    class(tads) :: this
+    
+    integer :: i,j,k
+
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_+1
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
+                ! Update rho_cp
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cpL + (1.0_WP-this%vf%VF(i,j,k))*this%cpG)
+                this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%fs%rho_l + (1.0_WP-this%vf%VF(i,j,k))*this%fs%rho_g)
+                this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)
+
+            end do
+        end do
+    end do
+end subroutine populate_palmore_arrays
+
+subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
+    implicit none
+    class(tads), intent(inout) :: this
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(out) :: dHGdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(out) :: dHLdt !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), intent(in) :: dt
+    real(WP), dimension(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_)  :: VFG,VFL
+    real(WP), dimension(:,:,:), allocatable :: FX_G,FY_G,FZ_G,FX_L,FY_L,FZ_L
+    real(WP) :: H_upx,H_upy,H_upz,diff_x,diff_y,diff_z,U_upx,U_upy,U_upz,Ux,Uy,Uz,diff_coeff
+    integer :: i,j,k
+
+    ! Testing Quick Scheme
+    this%nst=1
+    this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
+    this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
+    do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_+1
+        do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_+1
+            do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_+1
+                ! this%diff(i,j,k) = this%vf%VF(i,j,k)*this%kL + (1-this%vf%VF(i,j,k)) *this%kG ! Linear on VF
+                this%diff(i,j,k) = 1.0_WP / (this%vf%VF(i,j,k)/this%kL + (1.0_WP-this%vf%VF(i,j,k))/this%kG) ! Harmoinc on VF
+                this%cp(i,j,k) = (this%vf%VF(i,j,k)*this%cpL + (1.0_WP-this%vf%VF(i,j,k))*this%cpG)
+                this%rho(i,j,k) = (this%vf%VF(i,j,k)*this%rhoL + (1.0_WP-this%vf%VF(i,j,k))*this%rhoG)
+                this%rho_cp(i,j,k) = this%cp(i,j,k) * this%rho(i,j,k)                
+            end do
+        end do
+    end do
+
+    call this%fs%cfg%sync(this%diff)
+    call this%fs%cfg%sync(this%cp)
+
+    VFG = 1.0_WP-this%vf%VFold
+    VFL = this%vf%VFold
+
+    allocate(FX_G(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(FY_G(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(FZ_G(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+
+    allocate(FX_L(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(FY_L(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(FZ_L(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+
+    ! Advection
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_+1
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_+1
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_+1
+                ! Calculate Upwind Fluxes
+                
+                ! Gas Temperature
+
+                ! Fluxes on x-face
+                ! FX_G(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*sum(this%TG(i+this%stp1:i+this%stp2,j,k)*this%rhoG*this%cpG*VFG(i+this%stp1:i+this%stp2,j,k)) &
+                ! &           -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*sum(this%TG(i+this%stm1:i+this%stm2,j,k)*this%rhoG*this%cpG*VFG(i+this%stm1:i+this%stm2,j,k)) 
+                ! ! Fluxes on y-face
+                ! FY_G(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*sum(this%TG(i,j+this%stp1:j+this%stp2,k)*this%rhoG*this%cpG*VFG(i,j+this%stp1:j+this%stp2,k)) &
+                ! &           -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*sum(this%TG(i,j+this%stm1:j+this%stm2,k)*this%rhoG*this%cpG*VFG(i,j+this%stm1:j+this%stm2,k)) 
+                ! ! Fluxes on z-face
+                ! FZ_G(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*sum(this%TG(i,j,k+this%stp1:k+this%stp2)*this%rhoG*this%cpG*VFG(i,j,k+this%stp1:k+this%stp2)) &
+                ! &           -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%TG(i,j,k+this%stm1:k+this%stm2)*this%rhoG*this%cpG*VFG(i,j,k+this%stm1:k+this%stm2)) 
+
+                ! ! Liquid Temperature
+
+                ! ! Fluxes on x-face
+                ! FX_L(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*sum(this%TL(i+this%stp1:i+this%stp2,j,k)*this%rhoL*this%cpL*VFL(i+this%stp1:i+this%stp2,j,k)) &
+                ! &           -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*sum(this%TL(i+this%stm1:i+this%stm2,j,k)*this%rhoL*this%cpL*VFL(i+this%stm1:i+this%stm2,j,k)) 
+                ! ! Fluxes on y-face
+                ! FY_L(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*sum(this%TL(i,j+this%stp1:j+this%stp2,k)*this%rhoL*this%cpL*VFL(i,j+this%stp1:j+this%stp2,k)) &
+                ! &           -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*sum(this%TL(i,j+this%stm1:j+this%stm2,k)*this%rhoL*this%cpL*VFL(i,j+this%stm1:j+this%stm2,k)) 
+                ! ! Fluxes on z-face
+                ! FZ_L(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*sum(this%TL(i,j,k+this%stp1:k+this%stp2)*this%rhoL*this%cpL*VFL(i,j,k+this%stp1:k+this%stp2)) &
+                ! &           -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%TL(i,j,k+this%stm1:k+this%stm2)*this%rhoL*this%cpL*VFL(i,j,k+this%stm1:k+this%stm2)) 
+
+                ! WITHOUT THAT VOLUME FRACTION TERM
+
+                FX_G(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*sum(this%TG(i+this%stp1:i+this%stp2,j,k)*this%rhoG*this%cpG) &
+                &           -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*sum(this%TG(i+this%stm1:i+this%stm2,j,k)*this%rhoG*this%cpG) 
+                ! Fluxes on y-face
+                FY_G(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*sum(this%TG(i,j+this%stp1:j+this%stp2,k)*this%rhoG*this%cpG) &
+                &           -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*sum(this%TG(i,j+this%stm1:j+this%stm2,k)*this%rhoG*this%cpG) 
+                ! Fluxes on z-face
+                FZ_G(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*sum(this%TG(i,j,k+this%stp1:k+this%stp2)*this%rhoG*this%cpG) &
+                &           -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%TG(i,j,k+this%stm1:k+this%stm2)*this%rhoG*this%cpG) 
+
+                ! Liquid Temperature
+
+                ! Fluxes on x-face
+                FX_L(i,j,k)=-0.5_WP*(U(i,j,k)+abs(U(i,j,k)))*sum(this%TL(i+this%stp1:i+this%stp2,j,k)*this%rhoL*this%cpL) &
+                &           -0.5_WP*(U(i,j,k)-abs(U(i,j,k)))*sum(this%TL(i+this%stm1:i+this%stm2,j,k)*this%rhoL*this%cpL) 
+                ! Fluxes on y-face
+                FY_L(i,j,k)=-0.5_WP*(V(i,j,k)+abs(V(i,j,k)))*sum(this%TL(i,j+this%stp1:j+this%stp2,k)*this%rhoL*this%cpL) &
+                &           -0.5_WP*(V(i,j,k)-abs(V(i,j,k)))*sum(this%TL(i,j+this%stm1:j+this%stm2,k)*this%rhoL*this%cpL) 
+                ! Fluxes on z-face
+                FZ_L(i,j,k)=-0.5_WP*(W(i,j,k)+abs(W(i,j,k)))*sum(this%TL(i,j,k+this%stp1:k+this%stp2)*this%rhoL*this%cpL) &
+                &           -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%TL(i,j,k+this%stm1:k+this%stm2)*this%rhoL*this%cpL) 
+
+                ! Diffusion Terms added here
+                ! Slightly different treatment of mixed and full cells
+                if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+                    FX_G(i,j,k) = FX_G(i,j,k) + 
+            end do
+        end do
+    end do
+
+    call this%fs%cfg%sync(FX_G)
+    call this%fs%cfg%sync(FY_G)
+    call this%fs%cfg%sync(FZ_G)
+
+    call this%fs%cfg%sync(FX_L)
+    call this%fs%cfg%sync(FY_L)
+    call this%fs%cfg%sync(FZ_L)
+
+    ! Time derivative of rhoSC
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                dHGdt(i,j,k)=sum(this%fs%divp_x(:,i,j,k)*FX_G(i:i+1,j,k))+&
+                &            sum(this%fs%divp_y(:,i,j,k)*FY_G(i,j:j+1,k))+&
+                &            sum(this%fs%divp_z(:,i,j,k)*FZ_G(i,j,k:k+1))
+
+                dHLdt(i,j,k)=sum(this%fs%divp_x(:,i,j,k)*FX_L(i:i+1,j,k))+&
+                &            sum(this%fs%divp_y(:,i,j,k)*FY_L(i,j:j+1,k))+&
+                &            sum(this%fs%divp_z(:,i,j,k)*FZ_L(i,j,k:k+1))
+            end do
+        end do
+    end do
+
+    ! Update Temperature
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                if(1.0_WP-this%vf%VF(i,j,k) .gt. 1e-12_WP) then 
+                    ! this%TG(i,j,k) = (dHGdt(i,j,k) * dt + this%rhoG*VFG(i,j,k)*this%cpG*this%TGold(i,j,k))/(this%rhoG*(1.0_WP-this%vf%VF(i,j,k))*this%cpG)
+                    this%TG(i,j,k) = (dHGdt(i,j,k) * dt + this%rhoG*this%cpG*this%TGold(i,j,k))/(this%rhoG*this%cpG)
+                else
+                    this%TG(i,j,k) = (dHGdt(i,j,k) * dt + this%rhoG*this%cpG*this%TGold(i,j,k))/(this%rhoG*this%cpG)
+                    this%TG(i,j,k) = 0.0_WP
+                endif
+
+                if(this%vf%VF(i,j,k) .gt. 1e-12_WP) then
+                    ! this%TL(i,j,k) = (dHLdt(i,j,k) * dt + this%rhoL*VFL(i,j,k)*this%cpL*this%TL(i,j,k))/(this%rhoL*this%vf%VF(i,j,k)*this%cpL)
+                    this%TL(i,j,k) = (dHLdt(i,j,k) * dt + this%rhoL*this%cpL*this%TL(i,j,k))/(this%rhoL*this%cpL)
+                else
+                    this%TL(i,j,k) = (dHLdt(i,j,k) * dt + this%rhoL*this%cpL*this%TL(i,j,k))/(this%rhoL*this%cpL)
+                    this%TL(i,j,k) = 0.0_WP
+                endif
+            end do
+        end do
+    end do
+
+    call this%fs%cfg%sync(this%TG)
+    call this%fs%cfg%sync(this%TL)
+
+end subroutine step_temperature_palmore
+
+subroutine mix_temperature_palmore(this)
+    implicit none
+    class(tads) :: this
+
+    this%TPmix = this%TL*this%vf%VF + this%TG*(1.0_WP - this%vf%VF)
+
+end subroutine mix_temperature_palmore
+
+subroutine extrapolate_fields_palmore(this,field,on_value,out_field,dt)
+    implicit none
+    class(tads) :: this
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: on_value     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(inout) :: field
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(out)  :: out_field   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_)  :: dPhidt,k1,k2,k3,k4,temp
+    real(WP), intent(in) :: dt
+    integer :: i,j,k
+    real(WP) :: mag,mag0,time
+
+    ! Out-field Initial condition is just input field
+    out_field = field
+    temp = field
+    call compute_Aslam_RHS(this,temp,on_value,dPhidt)
+    mag = sum(dPhidt**2)/real(size(dPhidt),WP)
+    mag0 = mag
+    time = 0.0_WP
+    do while((mag .gt. 1e-6 .and. mag .lt. 10*mag0) .and. time .lt. 2.0_WP)
+        
+        ! RK4 Time integration
+        call compute_Aslam_RHS(this,temp            , on_value,k1)
+        call compute_Aslam_RHS(this,temp + k1 * dt/2.0_WP, on_value,k2)
+        call compute_Aslam_RHS(this,temp + k2 * dt/2.0_WP, on_value,k3)
+        call compute_Aslam_RHS(this,temp + k3 * dt  , on_value,k4)
+
+        ! Update Magnitude
+        dPhidt = (k1+2.0_WP*k2+2.0_WP*k3+k4)/6.0_WP
+        mag = sum(dPhidt**2)/real(size(dPhidt),WP)
+        ! print *, time,mag
+        ! Update Outfield
+        out_field = temp + dPhidt * dt
+        temp = out_field
+        time = time + dt
+    enddo
+
+end subroutine extrapolate_fields_palmore
+
+subroutine compute_Aslam_RHS(this,field,on_value,dPhidt)
+    class(tads) :: this
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: field,on_value     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(out)  :: dPhidt
+    real(WP) :: grad_x, grad_y, grad_z,A,mag
+    real(WP) :: normal_x,normal_y,normal_z
+    real(WP), dimension(3) :: normal 
+    integer :: i,j,k
+    real(WP) :: vals(6), eps
+    integer  :: cnt
+
+    eps = 1e-14_WP
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                ! Calculate Activation 
+                A = 1.0_WP
+                if(on_value(i,j,k) .gt. (1.0_WP - 1e-12)) then ! Turn off in the phase where we have data, and just use the data. 
+                    A = 0.0_WP
+                endif
+                ! Get Normal Value
+                ! normal_x = (this%vf%VF(i+1,j,k)-this%vf%VF(i-1,j,k))/(2*this%fs%cfg%dx(i))
+                ! normal_y = (this%vf%VF(i,j+1,k)-this%vf%VF(i,j-1,k))/(2*this%fs%cfg%dy(j))
+                ! normal_z = (this%vf%VF(i,j,k+1)-this%vf%VF(i,j,k-1))/(2*this%fs%cfg%dz(k))
+
+                normal_x = -(on_value(i+1,j,k)-on_value(i-1,j,k))/(2*this%fs%cfg%dx(i))
+                normal_y = -(on_value(i,j+1,k)-on_value(i,j-1,k))/(2*this%fs%cfg%dy(j))
+                normal_z = -(on_value(i,j,k+1)-on_value(i,j,k-1))/(2*this%fs%cfg%dz(k))
+
+                mag = sqrt(normal_x*normal_x + normal_y*normal_y + normal_z*normal_z)
+                if(mag .gt. 1e-12) then
+                    normal_x = normal_x/(mag+1e-12)
+                    normal_y = normal_y/(mag+1e-12)
+                    normal_z = normal_z/(mag+1e-12)
+                endif
+                ! Calculate Gradient using Upwinding on normal direction
+                if(normal_x .lt. 0.0) then 
+                    grad_x = (field(i+1,j,k)-field(i,j,k))/(this%fs%cfg%dx(i))
+                else
+                    grad_x = (field(i,j,k)-field(i-1,j,k))/(this%fs%cfg%dx(i))
+                endif
+
+                if(normal_y .lt. 0.0) then 
+                    grad_y = (field(i,j+1,k)-field(i,j,k))/(this%fs%cfg%dy(j))
+                else
+                    grad_y = (field(i,j,k)-field(i,j-1,k))/(this%fs%cfg%dy(j))
+                endif
+
+                if(normal_z .lt. 0.0) then 
+                    grad_z = (field(i,j,k+1)-field(i,j,k))/(this%fs%cfg%dz(k))
+                else
+                    grad_z = (field(i,j,k)-field(i,j,k-1))/(this%fs%cfg%dz(k))
+                endif
+                
+
+                ! Calculate Value
+                dPhidt(i,j,k) = - A * (normal_x*grad_x + normal_y*grad_y + normal_z*grad_z)
+            end do
+        end do
+    end do
+
+end subroutine compute_Aslam_RHS
 
 end module temp_transport
