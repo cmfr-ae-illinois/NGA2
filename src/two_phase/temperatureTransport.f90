@@ -757,9 +757,7 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                 &           -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%TL(i,j,k+this%stm1:k+this%stm2)*this%rhoL*this%cpL) 
 
                 ! Diffusion Terms added here
-                ! Slightly different treatment of mixed and full cells
-                if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
-                    FX_G(i,j,k) = FX_G(i,j,k) + 
+                
             end do
         end do
     end do
