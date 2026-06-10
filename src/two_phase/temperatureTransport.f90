@@ -66,7 +66,7 @@ module temp_transport
         ! Palmore Arrays
         real(WP), dimension(:,:,:), allocatable :: TG,TGold,TGExtrap !< Holds Gas Temperature Field
         real(WP), dimension(:,:,:), allocatable :: TL,TLold,TLExtrap !< Holds Liquid Temperature Field
-        real(WP), dimension(:,:,:), allocatable :: TPmix !< Holds Liquid Temperature Field
+        real(WP), dimension(:,:,:), allocatable :: TPmix,Tinterface !< Holds Liquid Temperature Field
         real(WP), dimension(:,:,:), allocatable :: uG !< Holds Gas Velocity Field
         real(WP), dimension(:,:,:), allocatable :: uL !< Holds Liquid Velocity Field
         ! Fluid Properties
@@ -94,6 +94,8 @@ module temp_transport
         procedure :: step_temperature_palmore
         procedure :: mix_temperature_palmore
         procedure :: compute_Aslam_RHS
+        procedure :: compute_liquid_face_fraction
+        procedure :: compute_interface_temperature
     end type tads
 contains
 ! Method Implementations here
@@ -170,6 +172,7 @@ subroutine init(this,fs_in,vf_in,time_in)
     allocate(this%uG(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(this%uL(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(this%TPmix(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%Tinterface(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     ! Update Init
     this%initialized = .true.
 end subroutine init 
@@ -669,14 +672,16 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
     real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
     real(WP), intent(in) :: dt
     real(WP), dimension(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_)  :: VFG,VFL
-    real(WP), dimension(:,:,:), allocatable :: FX_G,FY_G,FZ_G,FX_L,FY_L,FZ_L
+    real(WP), dimension(:,:,:), allocatable :: FX_G,FY_G,FZ_G,FX_L,FY_L,FZ_L,QI_G,QI_L
     real(WP) :: H_upx,H_upy,H_upz,diff_x,diff_y,diff_z,U_upx,U_upy,U_upz,Ux,Uy,Uz,diff_coeff
+    real(WP) :: indicator_x,indicator_y,indicator_z,beta,dist,interface_temp
+    real(WP), dimension(3) :: GBC_m,LBC_m,GBC_p,LBC_p,dBC,plicCenter
     integer :: i,j,k
 
     ! Testing Quick Scheme
     this%nst=1
-    this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1
-    this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1
+    this%stp1=-(this%nst+1)/2; this%stp2=this%nst+this%stp1-1 ! stp1 = -1, stp2 = -1
+    this%stm1=-(this%nst-1)/2; this%stm2=this%nst+this%stm1-1 ! stm1 = 0, stm2 = 0
     do k=this%fs%cfg%kmino_,this%fs%cfg%kmaxo_+1
         do j=this%fs%cfg%jmino_,this%fs%cfg%jmaxo_+1
             do i=this%fs%cfg%imino_,this%fs%cfg%imaxo_+1
@@ -757,6 +762,114 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                 &           -0.5_WP*(W(i,j,k)-abs(W(i,j,k)))*sum(this%TL(i,j,k+this%stm1:k+this%stm2)*this%rhoL*this%cpL) 
 
                 ! Diffusion Terms added here
+                ! Slightly different treatment of mixed and full cells
+                indicator_x = this%vf%VF(i,j,k) + this%vf%VF(i-1,j,k)
+                indicator_y = this%vf%VF(i,j,k) + this%vf%VF(i,j-1,k)
+                indicator_z = this%vf%VF(i,j,k) + this%vf%VF(i,j,k-1)
+                ! An indicator will always be between 0 and 2. 0 is full gas, 2 is full liquid, between is mixed. Treat each case differencely. 
+
+                ! Note I may be doing this wrong because right now both liquid and gas components updated flux in cell. 
+                ! But maybe I should check to see if the current cell is mixed or full, then based on that only update the flux associated with the phases present. 
+                
+                ! X Flux
+                
+                if(indicator_x .gt. 1e-12 .and. indicator_x .lt. 2.0_WP - 1e-12) then ! Mixed X
+                    ! Beta Calculation ***** 
+                    beta = 1.0_WP
+                    ! Get Barycenters
+                    GBC_m = this%vf%Gbary(:,i-1,j,k)
+                    LBC_m = this%vf%Lbary(:,i-1,j,k)
+
+                    GBC_p = this%vf%Gbary(:,i,j,k)
+                    LBC_p = this%vf%Lbary(:,i,j,k)
+                    
+                    ! Calculate diff coeff, assume no edge case of 0,1 for
+                    ! Gas 
+                    dBC = GBC_p-GBC_m
+                    diff_coeff = dBC(1)/sqrt(sum(dBC**2)) ! dx/distance
+
+                    FX_G(i,j,k) = FX_G(i,j,k) + beta * this%kG * diff_coeff * (this%TG(i,j,k)-this%TG(i-1,j,k))
+
+                    ! Liquid
+                    beta = 1.0_WP 
+                    dBC = LBC_p-LBC_m
+                    diff_coeff = dBC(1)/sqrt(sum(dBC**2))
+                    FX_L(i,j,k) = FX_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i-1,j,k))
+                    
+                else if(indicator_x .lt. 1e-12) then ! Full Gas
+                    FX_G(i,j,k) = FX_G(i,j,k) + this%kG * (this%TG(i,j,k) - this%TG(i-1,j,k))/this%fs%cfg%dx(i)
+                    ! Do nothing to liquid flux
+
+                else ! Full Liquid
+                    FX_L(i,j,k) = FX_L(i,j,k) + this%kL * (this%TL(i,j,k) - this%TL(i-1,j,k))/this%fs%cfg%dx(i)
+                    ! Do nothing to gas flux
+                endif
+
+                ! y Flux
+                if(indicator_y .gt. 1e-12 .and. indicator_y .lt. 2.0_WP - 1e-12) then ! Mixed y
+                    ! Beta Calculation ***** 
+                    beta = 1.0_WP
+                    ! Get Barycenters
+                    GBC_m = this%vf%Gbary(:,i-1,j,k)
+                    LBC_m = this%vf%Lbary(:,i-1,j,k)
+
+                    GBC_p = this%vf%Gbary(:,i,j,k)
+                    LBC_p = this%vf%Lbary(:,i,j,k)
+                    
+                    ! Calculate diff coeff, assume no edge case of 0,1 for
+                    ! Gas 
+                    dBC = GBC_p-GBC_m
+                    diff_coeff = dBC(2)/sqrt(sum(dBC**2)) ! dx/distance
+
+                    FY_G(i,j,k) = FY_G(i,j,k) + beta * this%kG * diff_coeff * (this%TG(i,j,k)-this%TG(i,j-1,k))
+
+                    ! Liquid
+                    beta = 1.0_WP 
+                    dBC = LBC_p-LBC_m
+                    diff_coeff = dBC(2)/sqrt(sum(dBC**2))
+                    FY_L(i,j,k) = FY_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i,j-1,k))
+
+                else if(indicator_y .lt. 1e-12) then ! Full Gas
+                    FY_G(i,j,k) = FY_G(i,j,k) + this%kG * (this%TG(i,j,k) - this%TG(i,j-1,k))/this%fs%cfg%dy(j)
+                    ! Do nothing to liquid flux
+
+                else ! Full Liquid
+                    FY_L(i,j,k) = FY_L(i,j,k) + this%kL * (this%TL(i,j,k) - this%TL(i,j-1,k))/this%fs%cfg%dy(j)
+                    ! Do nothing to gas flux
+                endif
+
+                !z Flux
+                if(indicator_z .gt. 1e-12 .and. indicator_z .lt. 2.0_WP - 1e-12) then ! Mixed z
+                    ! Beta Calculation ***** 
+                    beta = 1.0_WP
+                    ! Get Barycenters
+                    GBC_m = this%vf%Gbary(:,i-1,j,k)
+                    LBC_m = this%vf%Lbary(:,i-1,j,k)
+
+                    GBC_p = this%vf%Gbary(:,i,j,k)
+                    LBC_p = this%vf%Lbary(:,i,j,k)
+                    
+                    ! Calculate diff coeff, assume no edge case of 0,1 for
+                    ! Gas 
+                    dBC = GBC_p-GBC_m
+                    diff_coeff = dBC(3)/sqrt(sum(dBC**2)) ! dx/distance
+
+                    FZ_G(i,j,k) = FZ_G(i,j,k) + beta * this%kG * diff_coeff * (this%TG(i,j,k)-this%TG(i,j,k-1))
+
+                    ! Liquid
+                    beta = 1.0_WP 
+                    dBC = LBC_p-LBC_m
+                    diff_coeff = dBC(3)/sqrt(sum(dBC**2))
+                    FZ_L(i,j,k) = FZ_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i,j,k-1))
+
+                else if(indicator_z .lt. 1e-12) then ! Full Gas
+                    FZ_G(i,j,k) = FZ_G(i,j,k) + this%kG * (this%TG(i,j,k) - this%TG(i,j,k-1))/this%fs%cfg%dx(i)
+                    ! Do nothing to liquid flux
+
+                else ! Full Liquid
+                    FZ_L(i,j,k) = FZ_L(i,j,k) + this%kL * (this%TL(i,j,k) - this%TL(i,j,k-1))/this%fs%cfg%dx(i)
+                    ! Do nothing to gas flux
+                endif
                 
             end do
         end do
@@ -781,6 +894,22 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                 dHLdt(i,j,k)=sum(this%fs%divp_x(:,i,j,k)*FX_L(i:i+1,j,k))+&
                 &            sum(this%fs%divp_y(:,i,j,k)*FY_L(i,j:j+1,k))+&
                 &            sum(this%fs%divp_z(:,i,j,k)*FZ_L(i,j,k:k+1))
+
+                ! Add Interface Fluxes
+                if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then
+                    call this%compute_interface_temperature((/i,j,k/),interface_temp,plicCenter)
+                    ! Gas
+                    GBC_p = this%vf%Gbary(:,i,j,k)
+                    dBC = GBC_p-plicCenter
+                    diff_coeff = sqrt(sum(dBC**2))
+                    dHLdt(i,j,k) = dHLdt(i,j,k) + (this%KG * (this%TG(i,j,k) - interface_temp)/diff_coeff)*this%vf%SD(i,j,k)
+
+                    ! Gas
+                    LBC_p = this%vf%Lbary(:,i,j,k)
+                    dBC = LBC_p-plicCenter
+                    diff_coeff = sqrt(sum(dBC**2))
+                    dHLdt(i,j,k) = dHLdt(i,j,k) + (this%KG * (interface_temp - this%TL(i,j,k))/diff_coeff)*this%vf%SD(i,j,k)
+                endif
             end do
         end do
     end do
@@ -921,5 +1050,44 @@ subroutine compute_Aslam_RHS(this,field,on_value,dPhidt)
     end do
 
 end subroutine compute_Aslam_RHS
+
+subroutine compute_liquid_face_fraction(this,index)
+    class(tads) :: this
+    integer, dimension(3) :: index 
+end subroutine compute_liquid_face_fraction 
+
+subroutine compute_interface_temperature(this,index,tInterface,xPlic)
+    class(tads) :: this
+    integer, dimension(3),intent(in) :: index
+    real(WP) ,intent(out) :: tInterface
+    real(WP) :: tG,tL,dG,dL,numer,denom 
+    real(WP), dimension(3), intent(out),optional :: xPlic
+    real(WP),dimension(3) :: xL,xG
+
+    tG = this%TG(index(1),index(2),index(3))
+    tL = this%TL(index(1),index(2),index(3))
+
+    if(this%vf%VF(index(1),index(2),index(3)) .gt. 1e-12 .and. this%vf%VF(index(1),index(2),index(3)) .lt. 1.0_WP - 1e-12) then 
+        ! Mixed
+
+        ! Centers
+        xG = this%vf%Gbary(:,index(1),index(2),index(3))
+        xL = this%vf%Lbary(:,index(1),index(2),index(3))
+        xPlic = calculateCentroid(this%vf%interface_polygon(1,index(1),index(2),index(3)))
+        ! Compute Distances
+        dG = sqrt(sum((xG-xPlic)**2))
+        dL = sqrt(sum((xL-xPlic)**2))
+
+        ! Evaluate
+        numer = this%kG *tG/dG + this%kL*tL/dL
+        denom = this%kG/dG + this%kL/dL 
+        tInterface = numer/denom
+    else 
+        ! Full
+        tInterface = this%vf%VF(index(1),index(2),index(3)) * tL + (1.0_WP-this%vf%VF(index(1),index(2),index(3)))*tG
+
+    endif
+end subroutine compute_interface_temperature
+
 
 end module temp_transport
