@@ -783,18 +783,21 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                     GBC_p = this%vf%Gbary(:,i,j,k)
                     LBC_p = this%vf%Lbary(:,i,j,k)
                     
-                    ! Calculate diff coeff, assume no edge case of 0,1 for
+
+                    ! Liquid
+                    call compute_liquid_face_fraction(this,(/i,j,k/),(/i-1,j,k/),beta)
+                    dBC = LBC_p-LBC_m
+                    diff_coeff = dBC(1)/sqrt(sum(dBC**2))
+                    FX_L(i,j,k) = FX_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i-1,j,k))
+
                     ! Gas 
+                    beta = 1.0_WP - beta
                     dBC = GBC_p-GBC_m
                     diff_coeff = dBC(1)/sqrt(sum(dBC**2)) ! dx/distance
 
                     FX_G(i,j,k) = FX_G(i,j,k) + beta * this%kG * diff_coeff * (this%TG(i,j,k)-this%TG(i-1,j,k))
 
-                    ! Liquid
-                    beta = 1.0_WP 
-                    dBC = LBC_p-LBC_m
-                    diff_coeff = dBC(1)/sqrt(sum(dBC**2))
-                    FX_L(i,j,k) = FX_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i-1,j,k))
+                    
                     
                 else if(indicator_x .lt. 1e-12) then ! Full Gas
                     FX_G(i,j,k) = FX_G(i,j,k) + this%kG * (this%TG(i,j,k) - this%TG(i-1,j,k))/this%fs%cfg%dx(i)
@@ -807,27 +810,28 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
 
                 ! y Flux
                 if(indicator_y .gt. 1e-12 .and. indicator_y .lt. 2.0_WP - 1e-12) then ! Mixed y
-                    ! Beta Calculation ***** 
-                    beta = 1.0_WP
                     ! Get Barycenters
-                    GBC_m = this%vf%Gbary(:,i-1,j,k)
-                    LBC_m = this%vf%Lbary(:,i-1,j,k)
+                    GBC_m = this%vf%Gbary(:,i,j-1,k)
+                    LBC_m = this%vf%Lbary(:,i,j-1,k)
 
                     GBC_p = this%vf%Gbary(:,i,j,k)
                     LBC_p = this%vf%Lbary(:,i,j,k)
                     
-                    ! Calculate diff coeff, assume no edge case of 0,1 for
+
+                    ! Liquid
+                    call compute_liquid_face_fraction(this,(/i,j,k/),(/i,j-1,k/),beta)
+                    dBC = LBC_p-LBC_m
+                    diff_coeff = dBC(2)/sqrt(sum(dBC**2))
+                    FY_L(i,j,k) = FY_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i,j-1,k))
+
                     ! Gas 
+                    beta = 1.0_WP - beta
                     dBC = GBC_p-GBC_m
                     diff_coeff = dBC(2)/sqrt(sum(dBC**2)) ! dx/distance
 
                     FY_G(i,j,k) = FY_G(i,j,k) + beta * this%kG * diff_coeff * (this%TG(i,j,k)-this%TG(i,j-1,k))
 
-                    ! Liquid
-                    beta = 1.0_WP 
-                    dBC = LBC_p-LBC_m
-                    diff_coeff = dBC(2)/sqrt(sum(dBC**2))
-                    FY_L(i,j,k) = FY_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i,j-1,k))
+                    
 
                 else if(indicator_y .lt. 1e-12) then ! Full Gas
                     FY_G(i,j,k) = FY_G(i,j,k) + this%kG * (this%TG(i,j,k) - this%TG(i,j-1,k))/this%fs%cfg%dy(j)
@@ -839,28 +843,28 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                 endif
 
                 !z Flux
-                if(indicator_z .gt. 1e-12 .and. indicator_z .lt. 2.0_WP - 1e-12) then ! Mixed z
-                    ! Beta Calculation ***** 
-                    beta = 1.0_WP
+                if(indicator_z .gt. 1e-12 .and. indicator_z .lt. 2.0_WP - 1e-12) then ! Mixed z                    
                     ! Get Barycenters
-                    GBC_m = this%vf%Gbary(:,i-1,j,k)
-                    LBC_m = this%vf%Lbary(:,i-1,j,k)
+                    GBC_m = this%vf%Gbary(:,i,j,k-1)
+                    LBC_m = this%vf%Lbary(:,i,j,k-1)
 
                     GBC_p = this%vf%Gbary(:,i,j,k)
                     LBC_p = this%vf%Lbary(:,i,j,k)
-                    
-                    ! Calculate diff coeff, assume no edge case of 0,1 for
+
+                    ! Liquid
+                    call compute_liquid_face_fraction(this,(/i,j,k/),(/i,j,k-1/),beta)
+                    dBC = LBC_p-LBC_m
+                    diff_coeff = dBC(3)/sqrt(sum(dBC**2))
+                    FZ_L(i,j,k) = FZ_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i,j,k-1))
+
                     ! Gas 
+                    beta = 1.0_WP - beta
                     dBC = GBC_p-GBC_m
                     diff_coeff = dBC(3)/sqrt(sum(dBC**2)) ! dx/distance
 
                     FZ_G(i,j,k) = FZ_G(i,j,k) + beta * this%kG * diff_coeff * (this%TG(i,j,k)-this%TG(i,j,k-1))
 
-                    ! Liquid
-                    beta = 1.0_WP 
-                    dBC = LBC_p-LBC_m
-                    diff_coeff = dBC(3)/sqrt(sum(dBC**2))
-                    FZ_L(i,j,k) = FZ_L(i,j,k) + beta * this%kL * diff_coeff * (this%TL(i,j,k)-this%TL(i,j,k-1))
+                    
 
                 else if(indicator_z .lt. 1e-12) then ! Full Gas
                     FZ_G(i,j,k) = FZ_G(i,j,k) + this%kG * (this%TG(i,j,k) - this%TG(i,j,k-1))/this%fs%cfg%dx(i)
@@ -884,6 +888,7 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
     call this%fs%cfg%sync(FZ_L)
 
     ! Time derivative of rhoSC
+    
     do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
         do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
             do i=this%fs%cfg%imin_,this%fs%cfg%imax_
@@ -896,6 +901,7 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                 &            sum(this%fs%divp_z(:,i,j,k)*FZ_L(i,j,k:k+1))
 
                 ! Add Interface Fluxes
+                this%Tinterface(i,j,k) = 0.0_WP
                 if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then
                     call this%compute_interface_temperature((/i,j,k/),interface_temp,plicCenter)
                     ! Gas
@@ -904,11 +910,14 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                     diff_coeff = sqrt(sum(dBC**2))
                     dHLdt(i,j,k) = dHLdt(i,j,k) + (this%KG * (this%TG(i,j,k) - interface_temp)/diff_coeff)*this%vf%SD(i,j,k)
 
-                    ! Gas
+                    ! Liquid
                     LBC_p = this%vf%Lbary(:,i,j,k)
                     dBC = LBC_p-plicCenter
                     diff_coeff = sqrt(sum(dBC**2))
                     dHLdt(i,j,k) = dHLdt(i,j,k) + (this%KG * (interface_temp - this%TL(i,j,k))/diff_coeff)*this%vf%SD(i,j,k)
+
+                    ! Storage
+                    this%Tinterface(i,j,k) = interface_temp
                 endif
             end do
         end do
@@ -1051,9 +1060,137 @@ subroutine compute_Aslam_RHS(this,field,on_value,dPhidt)
 
 end subroutine compute_Aslam_RHS
 
-subroutine compute_liquid_face_fraction(this,index)
+subroutine compute_liquid_face_fraction(this,index_cell,index_next,fraction)
     class(tads) :: this
-    integer, dimension(3) :: index 
+    integer, dimension(3), intent(in) :: index_cell,index_next  
+    real(WP), intent(out) :: fraction
+    real(WP),dimension(1:3,1:8) :: cube_pts_cell,cube_pts_next
+    integer :: i,j,k,changing_index
+    real(WP), dimension(3) ::  n_cell,n_cell_proj,n_next,n_next_proj,center_cell,center_next,center_face ! Stores Normals
+    real(WP), dimension(4) :: plane
+    real(WP) :: mixedflag_cell, mixedflag_next ! Tells us if a cell is mixed or not - 0 for empty, -1 for mixed, 1 for full. +-
+    real(WP) :: d_cell,d_cell_proj,d_next,d_next_proj ! Distances
+    real(WP) :: total_face_area
+    real(WP) :: liquid_volume,gas_volume,face_fraction_cell,face_fraction_next
+    ! Cube Intersection
+    type(RectCub_type) :: cube_cell,cube_next
+    type(PlanarSep_type) :: plane_sep_cell,plane_sep_next
+    type(SepVM_type) :: phase_moments_cell,phase_moments_next
+    ! Since the fractions are not unique, we need to compute them for both and take the smaller one
+
+    ! Establish the first cell 
+    i = index_cell(1); j = index_cell(2); k = index_cell(3)
+    cube_pts_cell(:,1)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j  ),this%fs%cfg%z(k+1)]; 
+    cube_pts_cell(:,2)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j  ),this%fs%cfg%z(k  )];
+    cube_pts_cell(:,3)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j+1),this%fs%cfg%z(k  )];
+    cube_pts_cell(:,4)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j+1),this%fs%cfg%z(k+1)];
+    cube_pts_cell(:,5)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j  ),this%fs%cfg%z(k+1)];
+    cube_pts_cell(:,6)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j  ),this%fs%cfg%z(k  )];
+    cube_pts_cell(:,7)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j+1),this%fs%cfg%z(k  )];
+    cube_pts_cell(:,8)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j+1),this%fs%cfg%z(k+1)];
+    call new(cube_cell)
+    call construct(cube_cell,cube_pts_cell)
+
+    if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+        plane = getPlane(this%vf%liquid_gas_interface(i,j,k),0) 
+        n_cell=plane(1:3)
+        n_cell_proj = n_cell
+        d_cell = plane(4)
+        ! n_cell=calculateNormal(this%interface_polygon(1,i,j,k))
+        mixedflag_cell = -1.0_WP
+        center_cell = [this%fs%cfg%xm(i  ),this%fs%cfg%ym(j  ),this%fs%cfg%zm(k  )];
+    endif
+    ! Second Cell
+    i = index_next(1); j = index_next(2); k = index_next(3)
+    cube_pts_next(:,1)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j  ),this%fs%cfg%z(k+1)]; 
+    cube_pts_next(:,2)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j  ),this%fs%cfg%z(k  )];
+    cube_pts_next(:,3)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j+1),this%fs%cfg%z(k  )];
+    cube_pts_next(:,4)=[this%fs%cfg%x(i+1),this%fs%cfg%y(j+1),this%fs%cfg%z(k+1)];
+    cube_pts_next(:,5)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j  ),this%fs%cfg%z(k+1)];
+    cube_pts_next(:,6)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j  ),this%fs%cfg%z(k  )];
+    cube_pts_next(:,7)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j+1),this%fs%cfg%z(k  )];
+    cube_pts_next(:,8)=[this%fs%cfg%x(i  ),this%fs%cfg%y(j+1),this%fs%cfg%z(k+1)];
+    call new(cube_next)
+    call construct(cube_next,cube_pts_next)
+
+    if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+        plane = getPlane(this%vf%liquid_gas_interface(i,j,k),0) 
+        n_next=plane(1:3)
+        n_next_proj = n_next
+        d_next = plane(4)
+        mixedflag_next = -1.0_WP
+        center_next = [this%fs%cfg%xm(i  ),this%fs%cfg%ym(j  ),this%fs%cfg%zm(k  )];
+    endif
+    
+    ! Get face ceneter
+    center_face = (center_cell + center_next) * 0.5_WP 
+
+    ! To get direction of the face, compare coordinates of face center and cell center. The coordinate that changes is the normal direction. 
+    
+    if(abs(center_face(1) - center_cell(1)) .gt. 1e-12) then 
+        changing_index = 1
+        total_face_area = this%fs%cfg%dy(j)*this%fs%cfg%dz(k)
+    endif
+
+    if(abs(center_face(2) - center_cell(2)) .gt. 1e-12) then 
+        changing_index = 2
+        total_face_area = this%fs%cfg%dx(i)*this%fs%cfg%dz(k)
+    endif
+
+    if(abs(center_face(3) - center_cell(3)) .gt. 1e-12) then 
+        changing_index = 3
+        total_face_area = this%fs%cfg%dy(j)*this%fs%cfg%dx(i)
+    endif
+
+    ! Now that we have the direction, project the normals and calculate new distances, and make new planes and compute new area fractions
+    
+    if(mixedflag_cell .lt. -0.5_WP) then 
+        ! Projection into plane
+        n_cell_proj(changing_index) = 0.0_WP
+        ! Distance Update
+        d_cell_proj = d_cell - n_cell(changing_index) * center_face(changing_index)
+        ! Make New Plane
+        call new(plane_sep_cell)
+        ! Add plane
+        call addPlane(plane_sep_cell,n_cell_proj,d_cell_proj)
+        ! New Phase Moments
+        call new(phase_moments_cell)
+        call getNormMoments(cube_cell,plane_sep_cell,phase_moments_cell)
+        ! Now we want to get the liquid area
+        liquid_volume = getVolume(phase_moments_cell,0)
+        gas_volume = getVolume(phase_moments_cell, 1)
+        ! Now get face fraction, which is now equal to volume fraction due to projection
+        face_fraction_cell = liquid_volume/(liquid_volume+gas_volume) 
+    else
+        ! If it is full or empty, the above variables are undefine, so we don't want to do this. We want to just ignore it. 
+        face_fraction_cell = 1.0_WP ! We can do this since face fraction is [0,1] always. 
+    endif
+    
+    if(mixedflag_next .lt. -0.5_WP) then 
+        ! Projection into plane
+        n_next_proj(changing_index) = 0.0_WP
+        ! Distance Update
+        d_next_proj = d_next - n_next(changing_index) * center_face(changing_index)
+        ! Make New Plane
+        call new(plane_sep_next)
+        ! Add plane
+        call addPlane(plane_sep_next,n_next_proj,d_next_proj)
+        ! New Phase Moments
+        call new(phase_moments_next)
+        call getNormMoments(cube_next,plane_sep_next,phase_moments_next)
+        ! Now we want to get the liquid area
+        liquid_volume = getVolume(phase_moments_next,0)
+        gas_volume = getVolume(phase_moments_next, 1)
+        ! Now get face fraction, which is now equal to volume fraction due to projection
+        face_fraction_next = liquid_volume/(liquid_volume+gas_volume) 
+    else
+        ! If it is full or empty, the above variables are undefine, so we don't want to do this. We want to just ignore it.
+        face_fraction_next = 1.0_WP ! We can do this since face fraction is [0,1] always. 
+    endif
+
+    ! Return minimum of the two
+    fraction = min(face_fraction_cell,face_fraction_next)
+
 end subroutine compute_liquid_face_fraction 
 
 subroutine compute_interface_temperature(this,index,tInterface,xPlic)
@@ -1085,7 +1222,6 @@ subroutine compute_interface_temperature(this,index,tInterface,xPlic)
     else 
         ! Full
         tInterface = this%vf%VF(index(1),index(2),index(3)) * tL + (1.0_WP-this%vf%VF(index(1),index(2),index(3)))*tG
-
     endif
 end subroutine compute_interface_temperature
 
