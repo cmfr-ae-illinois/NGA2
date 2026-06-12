@@ -64,8 +64,8 @@ module temp_transport
         real(WP), dimension(:,:,:), allocatable :: rho                   !< Holds value of rho_cp
         real(WP), dimension(:,:,:), allocatable :: rho_cp                   !< Holds value of rho_cp
         ! Palmore Arrays
-        real(WP), dimension(:,:,:), allocatable :: TG,TGold,TGExtrap !< Holds Gas Temperature Field
-        real(WP), dimension(:,:,:), allocatable :: TL,TLold,TLExtrap !< Holds Liquid Temperature Field
+        real(WP), dimension(:,:,:), allocatable :: TG,TGold,TGExtrap,TGExtrapPalmore !< Holds Gas Temperature Field
+        real(WP), dimension(:,:,:), allocatable :: TL,TLold,TLExtrap,TLExtrapPalmore !< Holds Liquid Temperature Field
         real(WP), dimension(:,:,:), allocatable :: TPmix,Tinterface !< Holds Liquid Temperature Field
         real(WP), dimension(:,:,:), allocatable :: uG !< Holds Gas Velocity Field
         real(WP), dimension(:,:,:), allocatable :: uL !< Holds Liquid Velocity Field
@@ -96,6 +96,7 @@ module temp_transport
         procedure :: compute_Aslam_RHS
         procedure :: compute_liquid_face_fraction
         procedure :: compute_interface_temperature
+        procedure :: extrapolate_fields_normal
     end type tads
 contains
 ! Method Implementations here
@@ -173,6 +174,9 @@ subroutine init(this,fs_in,vf_in,time_in)
     allocate(this%uL(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(this%TPmix(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     allocate(this%Tinterface(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+
+    allocate(this%TGExtrapPalmore(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
+    allocate(this%TLExtrapPalmore(this%fs%cfg%imino_:this%fs%cfg%imaxo_,this%fs%cfg%jmino_:this%fs%cfg%jmaxo_,this%fs%cfg%kmino_:this%fs%cfg%kmaxo_))
     ! Update Init
     this%initialized = .true.
 end subroutine init 
@@ -978,7 +982,7 @@ subroutine extrapolate_fields_palmore(this,field,on_value,out_field,dt)
     mag0 = mag
     time = 0.0_WP
     do while((mag .gt. 1e-6 .and. mag .lt. 10*mag0) .and. time .lt. 2.0_WP)
-        
+        ! print *,time
         ! RK4 Time integration
         call compute_Aslam_RHS(this,temp            , on_value,k1)
         call compute_Aslam_RHS(this,temp + k1 * dt/2.0_WP, on_value,k2)
@@ -996,6 +1000,65 @@ subroutine extrapolate_fields_palmore(this,field,on_value,out_field,dt)
     enddo
 
 end subroutine extrapolate_fields_palmore
+
+subroutine extrapolate_fields_normal(this,field,on_value,out_field)
+    implicit none
+    class(tads) :: this
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(in)  :: on_value     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(inout) :: field
+    real(WP), dimension(this%fs%cfg%imino_:,this%fs%cfg%jmino_:,this%fs%cfg%kmino_:), intent(out)  :: out_field   !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
+    integer :: i,j,k,ii,jj,kk
+    real(WP) :: totalVal,totalWeight, weight 
+    real(WP),dimension(4) :: plane
+    real(WP),dimension(3) :: normal,center_target,center_curr,dCenters
+    ! Out-field Initial condition is just input field
+    out_field = field
+    do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+        do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+            do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                ! print *, i,j,k
+                if(on_value(i,j,k) .lt. 1e-12)  then ! If empty, average
+                    ! 3x3x3 Stencil Loop if empty
+                    totalVal = 0.0_WP
+                    totalWeight = 0.0_WP 
+                    center_target = [this%fs%cfg%xm(i),this%fs%cfg%ym(j),this%fs%cfg%zm(k)]
+                    do ii =-1,1
+                        do jj = -1,1
+                            do kk = -1,1
+                                if(on_value(i+ii,j+jj,k+kk) .gt. 1e-12 .and. on_value(i+ii,j+jj,k+kk) .lt. 1.0_WP - 1e-12) then 
+                                    ! Get plane since we know it is mixed
+                                    plane = getPlane(this%vf%liquid_gas_interface(i+ii,j+jj,k+kk),0) 
+                                    normal = plane(1:3)
+                                    normal = normal/sqrt(sum(normal**2))
+                                    ! get cell center
+                                    center_curr = [this%fs%cfg%xm(i+ii),this%fs%cfg%ym(j+jj),this%fs%cfg%zm(k+kk)]
+                                    ! cell center diff
+                                    dCenters = center_target - center_curr 
+                                    ! Normalize
+                                    dCenters = dCenters/sqrt(sum(dCenters**2)+1e-12)
+                                    ! Take dot product to get weight
+                                    weight = abs(normal(1)*dCenters(1) + normal(2)*dCenters(2) + normal(3)*dCenters(3))
+                                    ! Add
+                                    totalVal = totalVal + weight * field(i+ii,j+jj,k+kk)
+                                    totalWeight = totalWeight + weight
+                                endif
+                            enddo
+                        enddo
+                    enddo
+                    
+                    if (abs(totalWeight) .gt. 1e-12) then
+                        out_field(i,j,k) = totalVal/totalWeight
+                    endif
+                else !If full or mix, copy
+                    out_field(i,j,k) = field(i,j,k) 
+                endif
+
+            enddo
+        enddo
+    enddo
+    ! out_field = field
+    ! print *, 'complete'
+end subroutine extrapolate_fields_normal
 
 subroutine compute_Aslam_RHS(this,field,on_value,dPhidt)
     class(tads) :: this
