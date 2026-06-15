@@ -244,6 +244,8 @@ module vfs_class
       procedure :: fluxpoly_project_getmoments            !< Project face to get flux volume and output its moments
       procedure :: fluxpoly_cell_getvolcentr              !< Get the volume and centroid during generalized SL advection
 
+      procedure :: height_function_curvature              !< Compute curvature using generalised height-function of Popinet2009
+      procedure :: get_column_height  !< A helper function for the above, which computes the height and column ST value 
    end type vfs
    
    
@@ -4540,6 +4542,7 @@ contains
    end subroutine get_curvature
    
    
+   
    !> Perform local paraboloid fit of IRL surface in pointwise sense
    subroutine paraboloid_fit(this,i,j,k,iplane,mycurv)
       use mathtools, only: normalize,cross_product
@@ -4800,6 +4803,358 @@ contains
    end subroutine paraboloid_integral_fit
    
    
+   subroutine get_column_height(this,i0,j0,k0,dir,ret)
+      use messager,  only: die
+      implicit none
+
+      class(vfs), intent(inout) :: this
+      integer :: i0,j0,k0 !i0,j0,k0 tell us the original cell location
+      integer :: dir  ! 1 = x oriented, 2 = y oriented, 3 = z oriented. Sign gives direction
+
+      integer :: iplus,jplus,kplus ! Tells us how to add
+      integer :: i,j,k,count ! Current Cell Location
+      real(WP),dimension(4) :: ret ! [i,j,k,H] where i,j,k are for final cell visited in bottom direction and H is the height.
+      real(WP) :: H,ct,cb,ST,volSum
+      LOGICAL :: bound,whileTest
+
+      ! Initial Values
+      i = i0; j = j0; k = k0
+      ct = this%VF(i0,j0,k0)
+      H = this%VF(i0,j0,k0)
+      if((ct .gt. VFlo) .and. (ct .le. VFhi)) then 
+         volSum = ct
+      else
+         volSum = 0
+      endif
+      count = 0
+
+      ! Convert dir to Index Additions
+      SELECT CASE (abs(dir))
+         CASE (1) ! x oriented
+               iplus = sign(1,dir)
+               jplus = 0
+               kplus = 0
+         CASE (2) ! y oriented
+               iplus = 0
+               jplus = sign(1,dir)
+               kplus = 0
+         CASE (3) ! z oriented
+               iplus = 0
+               jplus = 0
+               kplus = sign(1,dir)
+      END SELECT
+
+      ! Set Initial Bound
+      if(ct .lt. VFhi) then 
+         bound = .TRUE.
+      else
+         bound = .FALSE.
+      endif
+
+      ! Find Top
+      do while(((.not. bound) .or. ( (ct.lt.VFhi) .and. (ct.gt. VFlo) )) ) ! If not at interface, or at interface exactly, then go to top neighbor, optional: .and. count .lt. 3
+         ! Go To Top Neighbor
+         i = i + iplus
+         j = j + jplus
+         k = k + kplus
+         ! Update ct
+         ct = this%VF(i,j,k)
+         ! Update H
+         H = H + ct
+         if((ct .gt. VFlo) .and. (ct .le. VFhi)) then
+               bound = .true.
+               volSum = volSum + ct
+         endif
+         count = count + 1
+      enddo
+
+      ! Catch Inconsistent result
+      if((ct .gt. VFlo)) then
+         H = -1.0_WP
+         ret = [-1.0_WP,-1.0_WP,-1.0_WP,-1.0_WP]
+         RETURN
+      endif
+
+      ! Reset to center
+      i = i0
+      j = j0
+      k = k0
+      cb = this%VF(i0,j0,k0)
+      count = 0
+      ! Set Initial Bound
+      if(cb .gt. VFlo) then 
+         bound = .TRUE.
+      else
+         bound = .FALSE.
+      endif
+
+      do while(((.not. bound) .or. ( (cb.lt.VFhi) .and. (cb.gt. VFlo) )) ) ! If not at interface, or at interface exactly, then go to Bottom neighbo, optional : .and. count .lt. 3
+         ! Go To Bottom Neighbor
+         i = i - iplus
+         j = j - jplus
+         k = k - kplus
+         ! Update cb
+         cb = this%VF(i,j,k)
+         ! Update H
+         H = H + cb
+         if((cb .gt. VFlo) .and. (cb .le. VFhi)) then
+               bound = .true.
+               volSum = volSum + cb
+         endif
+         count = count + 1
+      enddo
+
+      ! Catch Inconsistent result
+      if(cb .lt. VFhi) then
+         ! print *, "Inconsistent 2"
+         H = -2.0_WP
+         ret = [-2.0_WP,-2.0_WP,-2.0_WP,-2.0_WP]
+         RETURN
+      endif
+
+      !return N and H
+      ret = [0.0_WP,0.0_WP,0.0_WP,0.0_WP]
+      ret(1) = i
+      ret(2) = j
+      ret(3) = k
+      ret(4) = H
+   end subroutine get_column_height
+
+   subroutine height_function_curvature(this,i,j,k,dir,curv,curv_type)
+      use irl_fortran_interface
+      use f_PUNeigh_RectCub_class
+      use f_SeparatorVariant_class
+      use f_PUSolve_RectCub_class
+
+      implicit none
+      class(vfs), intent(inout) :: this
+      integer :: i,j,k,dir,n,iplus,jplus,kplus
+      real(WP), dimension(1) :: curv
+      real(WP) :: h0,hm1,hp1,dx,hP,hPP,shift ! h0 is the center height, hm1 is the cell to the "left" and hp1 is the cell to the right.
+      real(WP) :: h00,h10,h01,hm10,h0m1
+      real(WP) :: h11,hm1m1,h1m1,hm11
+      real(WP) :: Hx,Hy,Hxx,Hyy,Hxy
+      integer, dimension(3) :: cell00,cell10,cell01,cellm10,cell0m1
+      integer, dimension(3) :: cell11,cellm1m1,cell1m1,cellm11
+
+
+      integer, dimension(3) :: cell0,cellm1,cellp1
+      real(WP), dimension(4) :: cellAndHeight,cellAndHeight00,cellAndHeight10,cellAndHeight01,cellAndHeightm10,cellAndHeight0m1
+      real(WP), dimension(4) :: cellAndHeight11,cellAndHeightm1m1,cellAndHeight1m1,cellAndHeightm11
+      integer,intent(out),optional :: curv_type
+      ! If Full/Empty, return 0
+      if((this%VF(i,j,k) .gt. VFhi) .or. (this%VF(i,j,k) .lt. VFlo)) then
+         curv = 0.0_WP
+         ! dSTds = 0.0_WP
+         RETURN
+      endif
+      ! Convert dir to index additions in perpendicular direction
+      SELECT CASE (abs(dir))
+         CASE (1) ! x oriented
+            iplus = 0
+            jplus = -(sign(int(1),dir))
+            kplus = -(sign(int(1),dir))
+
+            call this%get_column_height(i,j,k,dir,cellAndHeight00)
+            call this%get_column_height(i,j+jplus,k,dir,cellAndHeight10)
+            call this%get_column_height(i,j-jplus,k,dir,cellAndHeightm10)
+
+            if(this%cfg%nz .ne. 1) then 
+               call this%get_column_height(i,j,k-kplus,dir,cellAndHeight0m1)
+               call this%get_column_height(i,j,k+kplus,dir,cellAndHeight01)
+               call this%get_column_height(i,j+jplus,k+kplus,dir,cellAndHeight11)
+               call this%get_column_height(i,j-jplus,k-kplus,dir,cellAndHeightm1m1)
+               call this%get_column_height(i,j+jplus,k-kplus,dir,cellAndHeight1m1)
+               call this%get_column_height(i,j-jplus,k+kplus,dir,cellAndHeightm11)
+            endif
+         CASE (2) ! y oriented
+            iplus = (sign(int(1),dir))
+            jplus = 0
+            kplus = (sign(int(1),dir))
+
+            call this%get_column_height(i,j,k,dir,cellAndHeight00)
+            call this%get_column_height(i+iplus,j,k,dir,cellAndHeight10)
+            call this%get_column_height(i-iplus,j,k,dir,cellAndHeightm10)
+
+            if(this%cfg%nz .ne. 1) then 
+               call this%get_column_height(i,j,k+kplus,dir,cellAndHeight01)
+               call this%get_column_height(i,j,k-kplus,dir,cellAndHeight0m1)
+               call this%get_column_height(i+iplus,j,k+kplus,dir,cellAndHeight11)
+               call this%get_column_height(i-iplus,j,k-kplus,dir,cellAndHeightm1m1)
+               call this%get_column_height(i+iplus,j,k-kplus,dir,cellAndHeight1m1)
+               call this%get_column_height(i-iplus,j,k+kplus,dir,cellAndHeightm11)
+            endif
+         CASE (3) ! z oriented
+            iplus = (sign(int(1),dir))
+            jplus = (sign(int(1),dir))
+            kplus = 0
+
+            call this%get_column_height(i,j,k,dir,cellAndHeight00)
+            call this%get_column_height(i+iplus,j,k,dir,cellAndHeight10)
+            call this%get_column_height(i,j+jplus,k,dir,cellAndHeight01)
+            call this%get_column_height(i-iplus,j,k,dir,cellAndHeightm10)
+            call this%get_column_height(i,j-jplus,k,dir,cellAndHeight0m1)
+
+            call this%get_column_height(i+iplus,j+jplus,k,dir,cellAndHeight11)
+            call this%get_column_height(i-iplus,j-jplus,k,dir,cellAndHeightm1m1)
+            call this%get_column_height(i+iplus,j-jplus,k,dir,cellAndHeight1m1)
+            call this%get_column_height(i-iplus,j+jplus,k,dir,cellAndHeightm11)
+      END SELECT
+      ! Unpack
+      cell00(1) = cellAndHeight00(1)
+      cell00(2) = cellAndHeight00(2)
+      cell00(3) = cellAndHeight00(3)
+      h00 = cellAndHeight00(4)
+
+      cell10(1) = cellAndHeight10(1)
+      cell10(2) = cellAndHeight10(2)
+      cell10(3) = cellAndHeight10(3)
+      h10 = cellAndHeight10(4)
+
+      cellm10(1) = cellAndHeightm10(1)
+      cellm10(2) = cellAndHeightm10(2)
+      cellm10(3) = cellAndHeightm10(3)
+      hm10 = cellAndHeightm10(4)
+      if(this%cfg%nz .ne. 1) then 
+         cell01(1) = cellAndHeight01(1)
+         cell01(2) = cellAndHeight01(2)
+         cell01(3) = cellAndHeight01(3)
+         h01 = cellAndHeight01(4)
+
+         cell0m1(1) = cellAndHeight0m1(1)
+         cell0m1(2) = cellAndHeight0m1(2)
+         cell0m1(3) = cellAndHeight0m1(3)
+         h0m1 = cellAndHeight0m1(4)
+
+         cell11(1) = cellAndHeight11(1)
+         cell11(2) = cellAndHeight11(2)
+         cell11(3) = cellAndHeight11(3)
+         h11 = cellAndHeight11(4)
+
+         cellm1m1(1) = cellAndHeightm1m1(1)
+         cellm1m1(2) = cellAndHeightm1m1(2)
+         cellm1m1(3) = cellAndHeightm1m1(3)
+         hm1m1 = cellAndHeightm1m1(4)
+
+         cellm11(1) = cellAndHeightm11(1)
+         cellm11(2) = cellAndHeightm11(2)
+         cellm11(3) = cellAndHeightm11(3)
+         hm11 = cellAndHeightm11(4)
+
+         cell1m1(1) = cellAndHeight1m1(1)
+         cell1m1(2) = cellAndHeight1m1(2)
+         cell1m1(3) = cellAndHeight1m1(3)
+         h1m1 = cellAndHeight1m1(4)
+      else 
+
+         call this%get_column_height(i,j,k,dir,cellAndHeight)
+         cell0(1) = cellAndHeight(1)
+         cell0(2) = cellAndHeight(2)
+         cell0(3) = cellAndHeight(3)
+         h0 = cellAndHeight(4)
+
+         call this%get_column_height(i+iplus,j+jplus,k,dir,cellAndHeight)
+         cellp1(1) = cellAndHeight(1)
+         cellp1(2) = cellAndHeight(2)
+         cellp1(3) = cellAndHeight(3)
+         hp1 = cellAndHeight(4)
+
+         call this%get_column_height(i-iplus,j-jplus,k,dir,cellAndHeight)
+         cellm1(1) = cellAndHeight(1)
+         cellm1(2) = cellAndHeight(2)
+         cellm1(3) = cellAndHeight(3)
+         hm1 = cellAndHeight(4)
+      endif
+
+
+      ! Consistency Check
+      if((sign(1.0_WP,hp1) .ne. -1.0_WP) .and. (sign(1.0_WP,hm1) .ne. -1.0_WP)) then 
+         ! consistent
+         ! Assume uniform mesh
+         ! Old 2D Code
+         if(this%cfg%nz .eq. 1) then 
+            dx = (this%cfg%xm(cell0(1)) - this%cfg%xm(cell0(1)+iplus)) + (this%cfg%ym(cell0(2)) - this%cfg%ym(cell0(2)+jplus))
+            dx = -dx
+            
+            h0 = h0*abs(dx)
+            ! Move Heights to a common origin
+            hm1 = hm1*abs(dx)
+            shift = this%cfg%xm(cellm1(1)) * (2-abs(dir))+ this%cfg%ym(cellm1(2)) * (abs(dir)-1)- this%cfg%xm(cell0(1)) * (2-abs(dir)) - this%cfg%ym(cell0(2)) * (abs(dir)-1)
+            hm1 = hm1 + shift*sign(1.0_WP,real(dir,WP))
+         
+            hp1 = hp1*abs(dx)
+            shift = this%cfg%xm(cellp1(1)) * (2-abs(dir))+ this%cfg%ym(cellp1(2)) * (abs(dir)-1)- this%cfg%xm(cell0(1)) * (2-abs(dir)) - this%cfg%ym(cell0(2)) * (abs(dir)-1)
+            hp1 = hp1 + shift*sign(1.0_WP,real(dir,WP)) 
+            
+            ! Now that everything is in the commmon frame, finite differences
+            hP = (hp1-hm1)/(2*abs(dx))
+            hPP = (hp1 - 2* h0 + hm1)/(dx*dx)
+
+            ! Calculate Curvature
+            curv = -hPP/((1.0_WP+hP*hP)**(1.5_WP))
+         else 
+            ! 3D Changes
+            ! Assumes uniform mesh
+            dx = this%cfg%dx(i)
+
+            h00  = shift_height(h00 ,cell00)
+            hm10 = shift_height(hm10,cellm10)
+            h10  = shift_height(h10 ,cell10)
+            h01  = shift_height(h01 ,cell01)
+            h0m1 = shift_height(h0m1,cell0m1)
+
+            h11 = shift_height(h11,cell11)
+            hm1m1 = shift_height(hm1m1,cellm1m1)
+            h1m1 = shift_height(h1m1,cell1m1)
+            hm11 = shift_height(hm11,cellm11)
+            ! Compute Derivatives
+            Hx = (h10 - hm10)/(2*dx)
+            Hy = (h01 - h0m1)/(2*dx)
+            Hxx = (h10 - 2*h00 + hm10)/(dx*dx)
+            Hyy = (h01 - 2*h00 + h0m1)/(dx*dx)
+            Hxy = (h11+hm1m1-h1m1-h1m1)/(4*dx*dx)
+            ! compute curvature
+            curv = (Hxx * (1+Hy*Hy) + Hyy * (1+Hx*Hx) - 2*Hx*Hy*Hxy)/((Hx*Hx + Hy*Hy +1)**(1.5_WP))
+         endif 
+         if(present(curv_type)) then 
+            curv_type = 1
+         endif
+      else 
+         curv = this%curv(i,j,k)
+         if(present(curv_type)) then 
+            curv_type = 2
+         endif
+      endif
+      contains 
+
+         function shift_height(h,cell) result(h_shifted)
+            real(WP), intent(in) :: h 
+            integer,dimension(3),intent(in) :: cell 
+            real(WP) :: h_shifted
+            real(WP) :: coord,coord0
+
+            SELECT CASE(abs(dir))
+            CASE(1) 
+               coord = this%cfg%xm(cell(1))
+               coord0 = this%cfg%xm(cell00(1))
+
+            CASE(2)
+               coord = this%cfg%ym(cell(2))
+               coord0 = this%cfg%ym(cell00(2))
+
+            CASE(3)
+               coord = this%cfg%zm(cell(3))
+               coord0 = this%cfg%zm(cell00(3))
+            end SELECT
+
+            h_shifted = h*abs(dx)
+               
+            h_shifted = h_shifted + (coord-coord0)*sign(1.0_WP,real(dir,WP))
+
+         end function shift_height
+   end subroutine height_function_curvature
+
+
    !> Private function to rapidly assess if a mixed cell is possible
    pure function crude_phase_test(this,b_ind) result(crude_phase)
       implicit none
@@ -5450,5 +5805,4 @@ contains
       end if
    end subroutine vfs_print
    
-
 end module vfs_class
