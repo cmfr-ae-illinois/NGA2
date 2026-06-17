@@ -912,13 +912,15 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                     GBC_p = this%vf%Gbary(:,i,j,k)
                     dBC = GBC_p-plicCenter
                     diff_coeff = sqrt(sum(dBC**2))
+
                     dHLdt(i,j,k) = dHLdt(i,j,k) + (this%KG * (this%TG(i,j,k) - interface_temp)/diff_coeff)*this%vf%SD(i,j,k)
 
                     ! Liquid
                     LBC_p = this%vf%Lbary(:,i,j,k)
                     dBC = LBC_p-plicCenter
                     diff_coeff = sqrt(sum(dBC**2))
-                    dHLdt(i,j,k) = dHLdt(i,j,k) + (this%KG * (interface_temp - this%TL(i,j,k))/diff_coeff)*this%vf%SD(i,j,k)
+
+                    dHLdt(i,j,k) = dHLdt(i,j,k) + (this%KL * (interface_temp - this%TL(i,j,k))/diff_coeff)*this%vf%SD(i,j,k)
 
                     ! Storage
                     this%Tinterface(i,j,k) = interface_temp
@@ -935,7 +937,7 @@ subroutine step_temperature_palmore(this,dHGdt,dHLdt ,U,V,W,dt)
                     ! this%TG(i,j,k) = (dHGdt(i,j,k) * dt + this%rhoG*VFG(i,j,k)*this%cpG*this%TGold(i,j,k))/(this%rhoG*(1.0_WP-this%vf%VF(i,j,k))*this%cpG)
                     this%TG(i,j,k) = (dHGdt(i,j,k) * dt + this%rhoG*this%cpG*this%TGold(i,j,k))/(this%rhoG*this%cpG)
                 else
-                    this%TG(i,j,k) = (dHGdt(i,j,k) * dt + this%rhoG*this%cpG*this%TGold(i,j,k))/(this%rhoG*this%cpG)
+                    ! this%TG(i,j,k) = (dHGdt(i,j,k) * dt + this%rhoG*this%cpG*this%TGold(i,j,k))/(this%rhoG*this%cpG)
                     this%TG(i,j,k) = 0.0_WP
                 endif
 
@@ -1019,6 +1021,7 @@ subroutine extrapolate_fields_normal(this,field,on_value,out_field)
                 ! print *, i,j,k
                 if(on_value(i,j,k) .lt. 1e-12)  then ! If empty, average
                     ! 3x3x3 Stencil Loop if empty
+                    
                     totalVal = 0.0_WP
                     totalWeight = 0.0_WP 
                     center_target = [this%fs%cfg%xm(i),this%fs%cfg%ym(j),this%fs%cfg%zm(k)]
@@ -1027,20 +1030,25 @@ subroutine extrapolate_fields_normal(this,field,on_value,out_field)
                             do kk = -1,1
                                 if(on_value(i+ii,j+jj,k+kk) .gt. 1e-12 .and. on_value(i+ii,j+jj,k+kk) .lt. 1.0_WP - 1e-12) then 
                                     ! Get plane since we know it is mixed
+                                    ! print *, "NEXT TO MIXED",i,j,k
                                     plane = getPlane(this%vf%liquid_gas_interface(i+ii,j+jj,k+kk),0) 
                                     normal = plane(1:3)
                                     normal = normal/sqrt(sum(normal**2))
+                                    ! print *,"Normal", normal 
                                     ! get cell center
                                     center_curr = [this%fs%cfg%xm(i+ii),this%fs%cfg%ym(j+jj),this%fs%cfg%zm(k+kk)]
                                     ! cell center diff
                                     dCenters = center_target - center_curr 
+                                    ! print*,dCenters
                                     ! Normalize
                                     dCenters = dCenters/sqrt(sum(dCenters**2)+1e-12)
                                     ! Take dot product to get weight
                                     weight = abs(normal(1)*dCenters(1) + normal(2)*dCenters(2) + normal(3)*dCenters(3))
+                                    ! print *,"Weight",weight
                                     ! Add
                                     totalVal = totalVal + weight * field(i+ii,j+jj,k+kk)
                                     totalWeight = totalWeight + weight
+                                    ! print*, totalVal,totalWeight
                                 endif
                             enddo
                         enddo
@@ -1048,11 +1056,12 @@ subroutine extrapolate_fields_normal(this,field,on_value,out_field)
                     
                     if (abs(totalWeight) .gt. 1e-12) then
                         out_field(i,j,k) = totalVal/totalWeight
+                        ! print *, "==============================="
                     endif
                 else !If full or mix, copy
                     out_field(i,j,k) = field(i,j,k) 
                 endif
-
+                
             enddo
         enddo
     enddo
@@ -1282,9 +1291,14 @@ subroutine compute_interface_temperature(this,index,tInterface,xPlic)
         numer = this%kG *tG/dG + this%kL*tL/dL
         denom = this%kG/dG + this%kL/dL 
         tInterface = numer/denom
+
+        if(denom .lt. 1e-12) then 
+            tInterface = (tG + tL)/2
+        endif
     else 
         ! Full
         tInterface = this%vf%VF(index(1),index(2),index(3)) * tL + (1.0_WP-this%vf%VF(index(1),index(2),index(3)))*tG
+        print *, "YOU SHOULDN'T BE HERE"
     endif
 end subroutine compute_interface_temperature
 
