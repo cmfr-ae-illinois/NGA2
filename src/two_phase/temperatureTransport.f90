@@ -1065,6 +1065,7 @@ subroutine extrapolate_fields_normal(this,field,on_value,out_field)
             enddo
         enddo
     enddo
+    call this%fs%cfg%sync(out_field)
     ! out_field = field
     ! print *, 'complete'
 end subroutine extrapolate_fields_normal
