@@ -1,0 +1,28 @@
+# Mesh parameters
+Base nx:                å4
+Base ny:                4
+Base nz:                4
+Max level:              5
+
+# Regridding parameters
+Regrid nsteps:          10
+Blocking factor:        2
+Max grid size:          8
+
+# Flow parameters
+Laplace number:         120
+Droplet stretching:     1 1 1
+Droplet velocity:       1 0 0
+
+# Time integration
+Max time:               0.8
+Max dt:                 2.5e-4
+Max CFL:                0.7
+
+# Output
+Output period:          5e-2
+Checkpoint period:      5e-2
+
+# Restart
+# Restart from:         restart/laplace_2.00000E-03
+
