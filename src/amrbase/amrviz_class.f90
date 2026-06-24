@@ -54,8 +54,9 @@ module amrviz_class
       procedure :: add_surfmesh                  !< Register a surface mesh
       procedure :: write                         !< Write all registered fields to single HDF5
       procedure :: finalize                      !< Clean up registered field lists
-      procedure, private :: write_vtp            !< Write surface mesh to VTP
-      procedure, private :: write_pvd            !< Write PVD collection file
+      procedure, private :: write_vtp            !< Write surface polygon mesh to VTP
+      procedure, private :: write_vtu            !< Write mixed surface polygon/triangle mesh to VTU
+      procedure, private :: write_pvd            !< Write PVD collection of VTP or VTU files
    end type amrviz
 
 contains
@@ -418,7 +419,11 @@ contains
          type(srf), pointer :: my_srf
          my_srf => this%first_srf
          do while (associated(my_srf))
-            call this%write_vtp(my_srf%name, my_srf%ptr)
+            if (my_srf%ptr%vtu_format) then
+               call this%write_vtu(my_srf%name, my_srf%ptr)
+            else
+               call this%write_vtp(my_srf%name, my_srf%ptr)
+            end if
             my_srf => my_srf%next
          end do
       end block write_surfaces
@@ -535,7 +540,7 @@ contains
    end function encode_base64
 
 
-   !> Write surface mesh to VTP file (binary base64 format)
+   !> Write surface polygon mesh to VTP file (binary base64 format)
    subroutine write_vtp(this, srf_name, smesh)
       implicit none
       class(amrviz), intent(in) :: this
@@ -645,7 +650,7 @@ contains
                write(iunit,'(a)') '      </Polys>'
                
                ! === Cell data (per-polygon variables) ===
-               if (smesh%nvar.gt.0 .and. allocated(smesh%var)) then
+               if (smesh%nvar.gt.0 .and. allocated(smesh%polyVar)) then
                   write(iunit,'(a)') '      <CellData>'
                   do v = 1, smesh%nvar
                      write(iunit,'(a,a,a)', advance='no') '        <DataArray type="Float64" Name="', &
@@ -654,7 +659,7 @@ contains
                      allocate(buffer(4 + nvar_bytes))
                      header_size = int(nvar_bytes, 4)
                      buffer(1:4) = transfer(header_size, buffer(1:4))
-                     buffer(5:) = transfer(smesh%var(v,1:smesh%nPoly), buffer(5:))
+                     buffer(5:) = transfer(smesh%polyVar(v,1:smesh%nPoly), buffer(5:))
                      b64_data = encode_base64(buffer, size(buffer))
                      write(iunit,'(a)', advance='no') b64_data
                      deallocate(buffer, b64_data)
@@ -692,19 +697,241 @@ contains
       
    end subroutine write_vtp
 
-
-   !> Write PVD collection file for time series
-   subroutine write_pvd(this, srf_name)
+   !> Write mixed surface polygon/bezier triangle mesh to VTU file (binary base64 format)
+   subroutine write_vtu(this, srf_name, smesh)
       implicit none
       class(amrviz), intent(in) :: this
       character(len=*), intent(in) :: srf_name
+      type(surfmesh), intent(in) :: smesh
+      
+      character(len=str_long) :: filename, dirname
+      character(len=str_medium) :: basename
+      character(len=:), allocatable :: b64_data
+      integer :: iunit, ierr, irank, n, v, conn_idx, vert_offset
+      integer :: npts_bytes, nconn_bytes, noff_bytes, ntype_bytes, nvar_bytes
+      integer(1), dimension(:), allocatable :: buffer
+      integer(4) :: header_size
+      real(WP), dimension(:), allocatable :: pts_data
+      integer(4), dimension(:), allocatable :: conn_data, off_data, type_data
+      integer :: nPoly, nBezierTri
+      integer(4) :: VTK_POLYGON = 7
+      integer(4) :: VTK_BEZIER_TRIANGLE = 76
+
+      ! Construct filename with timestep
+      dirname = 'amrviz/'//trim(this%name)
+      write(basename,'(A,"_",I6.6,".vtu")') trim(srf_name), this%ntime
+      filename = trim(dirname)//'/'//trim(basename)
+      
+      ! Root creates header
+      if (this%amr%amRoot) then
+         open(newunit=iunit, file=trim(filename), status='replace', action='write', iostat=ierr)
+         write(iunit,'(a)') '<?xml version="1.0"?>'
+         write(iunit,'(a)') '<VTKFile type="UnstructuredGrid" version="1.0" byte_order="LittleEndian" header_type="UInt32">'
+         write(iunit,'(a)') '  <UnstructuredGrid>'
+         close(iunit)
+      end if
+      call MPI_BARRIER(this%amr%comm, ierr)
+      
+      ! Each rank writes its data sequentially
+      do irank = 0, this%amr%nproc - 1
+         if (irank.eq.this%amr%rank) then
+            open(newunit=iunit, file=trim(filename), status='old', position='append', action='write', iostat=ierr)
+            
+            ! Write this rank's piece
+            if (smesh%nPoly+smesh%nBezierTri.gt.0 .and. smesh%nVert.gt.0) then
+               write(iunit,'(a,i0,a,i0,a)') '    <Piece NumberOfPoints="', smesh%nVert, &
+                  '" NumberOfCells="', smesh%nPoly+smesh%nBezierTri, '">'
+               
+               ! === Points (base64 binary) ===
+               write(iunit,'(a)') '      <Points>'
+               write(iunit,'(a)', advance='no') '        <DataArray type="Float64" NumberOfComponents="3" format="binary">'
+               
+               ! Pack points into byte buffer: [header(4 bytes)][data]
+               npts_bytes = smesh%nVert * 3 * 8
+               allocate(pts_data(smesh%nVert * 3))
+               do v = 1, smesh%nVert
+                  pts_data((v-1)*3 + 1) = smesh%xVert(v)
+                  pts_data((v-1)*3 + 2) = smesh%yVert(v)
+                  pts_data((v-1)*3 + 3) = smesh%zVert(v)
+               end do
+               allocate(buffer(4 + npts_bytes))
+               header_size = int(npts_bytes, 4)
+               buffer(1:4) = transfer(header_size, buffer(1:4))
+               buffer(5:) = transfer(pts_data, buffer(5:))
+               b64_data = encode_base64(buffer, size(buffer))
+               write(iunit,'(a)', advance='no') b64_data
+               deallocate(buffer, pts_data, b64_data)
+               
+               write(iunit,'(a)') '</DataArray>'
+               write(iunit,'(a)') '      </Points>'
+
+               ! === PointData (base64 binary) ===
+               write(iunit,'(a)') '      <PointData RationalWeights="RationalWeights">'
+               write(iunit,'(a)', advance='no') '        <DataArray type="Float64" Name="RationalWeights" format="binary">'
+               
+               ! Pack points into byte buffer: [header(4 bytes)][data]
+               npts_bytes = smesh%nVert * 8
+               allocate(pts_data(smesh%nVert))
+               do v = 1, smesh%nVert
+                  pts_data(v) = smesh%wVert(v)
+               end do
+               allocate(buffer(4 + npts_bytes))
+               header_size = int(npts_bytes, 4)
+               buffer(1:4) = transfer(header_size, buffer(1:4))
+               buffer(5:) = transfer(pts_data, buffer(5:))
+               b64_data = encode_base64(buffer, size(buffer))
+               write(iunit,'(a)', advance='no') b64_data
+               deallocate(buffer, pts_data, b64_data)
+               
+               write(iunit,'(a)') '</DataArray>'
+               write(iunit,'(a)') '      </PointData>'
+               
+               ! === Cells (connectivity + offsets + types) ===
+               write(iunit,'(a)') '      <Cells>'
+               
+               ! Connectivity
+               write(iunit,'(a)', advance='no') '        <DataArray type="Int32" Name="connectivity" format="binary">'
+               nconn_bytes = (sum(smesh%polySize(1:smesh%nPoly)) + 6*smesh%nBezierTri) * 4
+               allocate(conn_data(sum(smesh%polySize(1:smesh%nPoly)) + 6*smesh%nBezierTri))
+               conn_idx = 1
+               do n = 1, smesh%nPoly
+                  do v = 1, smesh%polySize(n)
+                     conn_data(conn_idx) = int(smesh%polyConn(conn_idx) - 1, 4)  ! 0-based for VTK
+                     conn_idx = conn_idx + 1
+                  end do
+               end do
+               do n = 1, smesh%nBezierTri
+                  do v = 1, 6
+                     conn_data(conn_idx) = int(smesh%bezierTriConn((n-1)*6+v) - 1, 4)  ! 0-based for VTK
+                     conn_idx = conn_idx + 1
+                  end do
+               end do
+               allocate(buffer(4 + nconn_bytes))
+               header_size = int(nconn_bytes, 4)
+               buffer(1:4) = transfer(header_size, buffer(1:4))
+               buffer(5:) = transfer(conn_data, buffer(5:))
+               b64_data = encode_base64(buffer, size(buffer))
+               write(iunit,'(a)', advance='no') b64_data
+               deallocate(buffer, conn_data, b64_data)
+               write(iunit,'(a)') '</DataArray>'
+               
+               ! Offsets
+               write(iunit,'(a)', advance='no') '        <DataArray type="Int32" Name="offsets" format="binary">'
+               noff_bytes = (smesh%nPoly+smesh%nBezierTri) * 4
+               allocate(off_data(smesh%nPoly+smesh%nBezierTri))
+               vert_offset = 0
+               do n = 1, smesh%nPoly
+                  vert_offset = vert_offset + smesh%polySize(n)
+                  off_data(n) = int(vert_offset, 4)
+               end do
+               do n = 1+smesh%nPoly, smesh%nPoly+smesh%nBezierTri
+                  vert_offset = vert_offset + 6
+                  off_data(n) = int(vert_offset, 4)
+               end do
+               allocate(buffer(4 + noff_bytes))
+               header_size = int(noff_bytes, 4)
+               buffer(1:4) = transfer(header_size, buffer(1:4))
+               buffer(5:) = transfer(off_data, buffer(5:))
+               b64_data = encode_base64(buffer, size(buffer))
+               write(iunit,'(a)', advance='no') b64_data
+               deallocate(buffer, off_data, b64_data)
+               write(iunit,'(a)') '</DataArray>'
+
+               ! Types
+               write(iunit,'(a)', advance='no') '        <DataArray type="Int32" Name="types" format="binary">'
+               ntype_bytes = (smesh%nPoly+smesh%nBezierTri) * 4
+               allocate(type_data(smesh%nPoly+smesh%nBezierTri))
+               do n = 1, smesh%nPoly
+                  type_data(n) = int(VTK_POLYGON, 4)
+               end do
+               do n = 1+smesh%nPoly, smesh%nPoly+smesh%nBezierTri
+                  type_data(n) = int(VTK_BEZIER_TRIANGLE, 4)
+               end do
+               allocate(buffer(4 + ntype_bytes))
+               header_size = int(ntype_bytes, 4)
+               buffer(1:4) = transfer(header_size, buffer(1:4))
+               buffer(5:) = transfer(type_data, buffer(5:))
+               b64_data = encode_base64(buffer, size(buffer))
+               write(iunit,'(a)', advance='no') b64_data
+               deallocate(buffer, type_data, b64_data)
+               write(iunit,'(a)') '</DataArray>'
+
+               write(iunit,'(a)') '      </Cells>'
+               
+               ! === Cell data (per-polygon variables) ===
+               if (smesh%nvar.gt.0) then
+                  write(iunit,'(a)') '      <CellData>'
+                  do v = 1, smesh%nvar
+                     write(iunit,'(a,a,a)', advance='no') '        <DataArray type="Float64" Name="', &
+                        trim(smesh%varname(v)), '" format="binary">'
+                     nvar_bytes = (smesh%nPoly+smesh%nBezierTri) * 8
+                     allocate(buffer(4 + nvar_bytes))
+                     header_size = int(nvar_bytes, 4)
+                     buffer(1:4) = transfer(header_size, buffer(1:4))
+                     if (allocated(smesh%polyVar)) then 
+                        buffer(5:4+smesh%nPoly*8) = transfer(smesh%polyVar(v,1:smesh%nPoly), buffer(5:4+smesh%nPoly*8))
+                     end if
+                     if (allocated(smesh%triVar)) then 
+                        buffer(5+smesh%nPoly*8:) = transfer(smesh%triVar(v,1:smesh%nBezierTri), buffer(5+smesh%nPoly*8:))
+                     end if
+                     b64_data = encode_base64(buffer, size(buffer))
+                     write(iunit,'(a)', advance='no') b64_data
+                     deallocate(buffer, b64_data)
+                     write(iunit,'(a)') '</DataArray>'
+                  end do
+                  write(iunit,'(a)') '      </CellData>'
+               end if
+               
+               write(iunit,'(a)') '    </Piece>'
+            end if
+            
+            close(iunit)
+         end if
+         call MPI_BARRIER(this%amr%comm, ierr)
+      end do
+      
+      ! Check how many polygons were written
+      nPoly=smesh%nPoly; call MPI_ALLREDUCE(MPI_IN_PLACE,nPoly,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+      nBezierTri=smesh%nBezierTri; call MPI_ALLREDUCE(MPI_IN_PLACE,nBezierTri,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+
+      ! Rank 0 writes footer
+      if (this%amr%amRoot) then
+         open(newunit=iunit, file=trim(filename), status='old', position='append', action='write', iostat=ierr)
+         if ((nPoly+nBezierTri).eq.0) then
+            write(iunit,'(a)') '    <Piece NumberOfPoints="0" NumberOfPolys="0">'
+            write(iunit,'(a)') '    </Piece>'
+         end if
+         write(iunit,'(a)') '  </UnstructuredGrid>'
+         write(iunit,'(a)') '</VTKFile>'
+         close(iunit)
+      end if
+      call MPI_BARRIER(this%amr%comm, ierr)
+      
+      ! Write PVD collection file
+      call this%write_pvd(srf_name,vtu_format=.true.)
+      
+   end subroutine write_vtu
+
+   !> Write PVD collection file for time series
+   subroutine write_pvd(this, srf_name, vtu_format)
+      implicit none
+      class(amrviz), intent(in) :: this
+      character(len=*), intent(in) :: srf_name
+      logical, intent(in), optional :: vtu_format
       character(len=str_long) :: filename,dirname
       character(len=str_medium) :: basename,time_str
+      character(len=str_medium) :: fileformat
       integer :: iunit, ierr, n
-      
+
       ! Only root writes PVD
       if (.not.this%amr%amRoot) return
-      
+
+      if (present(vtu_format)) then
+         fileformat = merge('vtu', 'vtp', vtu_format)
+      else
+         fileformat = 'vtp'
+      end if
+
       dirname = 'amrviz/'//trim(this%name)
       filename = trim(dirname)//'/'//trim(srf_name)//'.pvd'
       
@@ -715,7 +942,7 @@ contains
       write(iunit,'(a)') '  <Collection>'
       
       do n = 1, this%ntime
-         write(basename,'(A,"_",I6.6,".vtp")') trim(srf_name), n
+         write(basename,'(A,"_",I6.6,".",A)') trim(srf_name), n, trim(fileformat)
          write(time_str,'(g0.17)') this%time(n)
          write(iunit,'(a,a,a,a,a)') '    <DataSet timestep="', trim(adjustl(time_str)), &
             '" file="', trim(basename), '"/>'
