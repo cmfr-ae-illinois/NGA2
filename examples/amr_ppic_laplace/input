@@ -1,13 +1,13 @@
 # Mesh parameters
-Base nx:                4
-Base ny:                4
-Base nz:                4
+Base nx:                8
+Base ny:                8
+Base nz:                8
 Max level:              5
 
 # Regridding parameters
 Regrid nsteps:          10
-Blocking factor:        2
-Max grid size:          8
+Blocking factor:        8
+Max grid size:          32
 
 # Flow parameters
 Laplace number:         120
