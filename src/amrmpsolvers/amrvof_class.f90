@@ -2521,7 +2521,7 @@
       !> Override on_init: reset VF/VFold level layout, rebuild finest-level mfabs
       subroutine on_init(this,lvl,time,ba,dm)
          use amrgrid_class, only: mfab_rebuild
-         use amrpic_class, only: picmfab_rebuild,pic_ncomp
+         use amrpic_class, only: picmfab_rebuild
          implicit none
          class(amrvof), intent(inout) :: this
          integer, intent(in) :: lvl
@@ -2536,11 +2536,11 @@
             call mfab_rebuild    (this%CL     ,ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%CG     ,ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%PLIC   ,ba,dm,nc=4,ng=this%nover)
-            call picmfab_rebuild (this%PIC    ,ba,dm,nc=pic_ncomp,ng=this%nover)
+            call picmfab_rebuild (this%PIC    ,ba,dm,nc=1,ng=this%nover)
             call mfab_rebuild    (this%CLold  ,ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%CGold  ,ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%PLICold,ba,dm,nc=4,ng=this%nover)
-            call picmfab_rebuild (this%PICold ,ba,dm,nc=pic_ncomp,ng=this%nover)
+            call picmfab_rebuild (this%PICold ,ba,dm,nc=1,ng=this%nover)
             if (this%calculate_curv) then
                call mfab_rebuild(this%curv,ba,dm,nc=1,ng=this%nover)
                call mfab_rebuild(this%SD  ,ba,dm,nc=1,ng=this%nover)
@@ -2551,7 +2551,7 @@
       !> Override on_coarse: create new fine level from coarse, rebuild finest-level mfabs
       subroutine on_coarse(this,lvl,time,ba,dm)
          use amrgrid_class, only: mfab_rebuild
-         use amrpic_class, only: picmfab_rebuild,set_to_full_or_empty,pic_container,pic_ncomp
+         use amrpic_class, only: picmfab_rebuild,set_to_full_or_empty,pic_container
          implicit none
          class(amrvof), intent(inout) :: this
          integer, intent(in) :: lvl
@@ -2567,11 +2567,11 @@
             call mfab_rebuild    (this%CL,     ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%CG,     ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%PLIC,   ba,dm,nc=4,ng=this%nover)
-            call picmfab_rebuild (this%PIC,    ba,dm,nc=pic_ncomp,ng=this%nover)
+            call picmfab_rebuild (this%PIC,    ba,dm,nc=1,ng=this%nover)
             call mfab_rebuild    (this%CLold,  ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%CGold,  ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild    (this%PLICold,ba,dm,nc=4,ng=this%nover)
-            call picmfab_rebuild (this%PICold ,ba,dm,nc=pic_ncomp,ng=this%nover)
+            call picmfab_rebuild (this%PICold ,ba,dm,nc=1,ng=this%nover)
             if (this%calculate_curv) then
                call mfab_rebuild(this%curv,ba,dm,nc=1,ng=this%nover)
                call mfab_rebuild(this%SD  ,ba,dm,nc=1,ng=this%nover)
@@ -2600,7 +2600,7 @@
                      pCL(i,j,k,:)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                      pCG(i,j,k,:)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                      call set_to_full_or_empty(pPLIC(i,j,k,:),pVF(i,j,k,1))
-                     call set_to_full_or_empty(pPIC(i,j,k,:) ,pVF(i,j,k,1))
+                     call set_to_full_or_empty(pPIC(i,j,k,1) ,pVF(i,j,k,1))
                   end do; end do; end do
                end do
                call amrex_mfiter_destroy(mfi)
@@ -2626,7 +2626,7 @@
             remake_finest: block
                use amrex_amr_module, only: amrex_multifab_build,amrex_multifab_destroy, &
                &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-               use amrpic_class, only: picmfab_build,picmfab_rebuild,pic_ncomp
+               use amrpic_class, only: picmfab_build,picmfab_rebuild
                type(amrex_multifab) :: CL_new,CG_new,curv_new,SD_new,PLIC_new
                type(picmfab) :: PIC_new
                type(amrex_mfiter) :: mfi
@@ -2639,7 +2639,7 @@
                call amrex_multifab_build  (CL_new  ,ba,dm,nc=3,ng=this%nover)
                call amrex_multifab_build  (CG_new  ,ba,dm,nc=3,ng=this%nover)
                call amrex_multifab_build  (PLIC_new,ba,dm,nc=4,ng=this%nover)
-               call picmfab_build         (PIC_new ,ba,dm,nc=pic_ncomp,ng=this%nover)
+               call picmfab_build         (PIC_new ,ba,dm,nc=1,ng=this%nover)
                ! Set to trivial values
                dx=this%amr%dx(lvl); dy=this%amr%dy(lvl); dz=this%amr%dz(lvl)
                call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
@@ -2656,7 +2656,7 @@
                      pCL(i,j,k,:)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                      pCG(i,j,k,:)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                      call set_to_full_or_empty(pPLIC(i,j,k,:),pVF(i,j,k,1))
-                     call set_to_full_or_empty(pPIC(i,j,k,:) ,pVF(i,j,k,1))
+                     call set_to_full_or_empty(pPIC(i,j,k,1) ,pVF(i,j,k,1))
                   end do; end do; end do
                end do
                call amrex_mfiter_destroy(mfi)
@@ -2683,7 +2683,7 @@
                call mfab_rebuild    (this%CLold,  ba,dm,nc=3,ng=this%nover)
                call mfab_rebuild    (this%CGold,  ba,dm,nc=3,ng=this%nover)
                call mfab_rebuild    (this%PLICold,ba,dm,nc=4,ng=this%nover)
-               call picmfab_rebuild (this%PICold ,ba,dm,nc=pic_ncomp,ng=this%nover)
+               call picmfab_rebuild (this%PICold ,ba,dm,nc=1,ng=this%nover)
             end block remake_finest
          end if
       end subroutine on_remake
@@ -2816,7 +2816,6 @@
 
       !> Copy current state to old state
       subroutine store_old(this)
-         use amrpic_class, only: pic_ncomp
          implicit none
          class(amrvof), intent(inout) :: this
          ! Return if clvl<maxlvl
@@ -2827,7 +2826,7 @@
          call this%CLold%copy  (srcmf=this%CL  ,srccomp=1,dstcomp=1,nc=3,ng=this%nover)
          call this%CGold%copy  (srcmf=this%CG  ,srccomp=1,dstcomp=1,nc=3,ng=this%nover)
          call this%PLICold%copy(srcmf=this%PLIC,srccomp=1,dstcomp=1,nc=4,ng=this%nover)
-         call this%PICold%copy (srcmf=this%PIC ,srccomp=1,dstcomp=1,nc=pic_ncomp,ng=this%nover)
+         call this%PICold%copy (srcmf=this%PIC ,srccomp=1,dstcomp=1,nc=1,ng=this%nover)
       end subroutine store_old
 
       !> Unified ghost fill: VF at all levels, CL/CG/PLIC at maxlvl
@@ -2985,7 +2984,7 @@
                            pCL(ig,jg,kg,dir)=2.0_WP*bnd(dir,(3+side)/2)-pCL(ig,jg,kg,dir)
                            pCG(ig,jg,kg,dir)=2.0_WP*bnd(dir,(3+side)/2)-pCG(ig,jg,kg,dir)
                            call reflect_pic(pPLIC(ig,jg,kg,:),pPLIC(ind(1),ind(2),ind(3),:),dir,bnd(dir,(3+side)/2))
-                           call reflect_pic(pPIC(ig,jg,kg,:),pPIC(ind(1),ind(2),ind(3),:),dir,bnd(dir,(3+side)/2))
+                           call reflect_pic(pPIC(ig,jg,kg,1),pPIC(ind(1),ind(2),ind(3),1),dir,bnd(dir,(3+side)/2))
                         end if
                      end do; end do; end do
                   case(BC_LIQ)
@@ -2995,7 +2994,7 @@
                            pCL(ig,jg,kg,:)=[this%amr%xlo+(real(ig,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(jg,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(kg,WP)+0.5_WP)*this%amr%dz(lvl)]
                            pCG(ig,jg,kg,:)=[this%amr%xlo+(real(ig,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(jg,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(kg,WP)+0.5_WP)*this%amr%dz(lvl)]
                            call set_to_full(pPLIC(ig,jg,kg,:))
-                           call set_to_full(pPIC(ig,jg,kg,:))
+                           call set_to_full(pPIC(ig,jg,kg,1))
                         end if
                      end do; end do; end do
                   case(BC_GAS)
@@ -3005,7 +3004,7 @@
                            pCL(ig,jg,kg,:)=[this%amr%xlo+(real(ig,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(jg,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(kg,WP)+0.5_WP)*this%amr%dz(lvl)]
                            pCG(ig,jg,kg,:)=[this%amr%xlo+(real(ig,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(jg,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(kg,WP)+0.5_WP)*this%amr%dz(lvl)]
                            call set_to_empty(pPLIC(ig,jg,kg,:))
-                           call set_to_empty(pPIC(ig,jg,kg,:))
+                           call set_to_empty(pPIC(ig,jg,kg,1))
                         end if
                      end do; end do; end do
                   case(BC_USER)
@@ -3015,7 +3014,7 @@
                      ! BC is always PLIC; therefore we set PIC to corresponding PLIC
                      do kg=k1,k2; do jg=j1,j2; do ig=i1,i2
                         if (at_finest) then
-                           call set_to_one_plane(pPIC(ig,jg,kg,:),pPLIC(ig,jg,kg,1:3),pPLIC(ig,jg,kg,4))
+                           call set_to_one_plane(pPIC(ig,jg,kg,1),pPLIC(ig,jg,kg,1:3),pPLIC(ig,jg,kg,4))
                         end if
                      end do; end do; end do
                   end select
@@ -3030,7 +3029,7 @@
                         pCL(ig,jg,kg,:)=[this%amr%xlo+(real(ig,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(jg,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(kg,WP)+0.5_WP)*this%amr%dz(lvl)]
                         pCG(ig,jg,kg,:)=[this%amr%xlo+(real(ig,WP)+0.5_WP)*this%amr%dx(lvl),this%amr%ylo+(real(jg,WP)+0.5_WP)*this%amr%dy(lvl),this%amr%zlo+(real(kg,WP)+0.5_WP)*this%amr%dz(lvl)]
                         call set_to_full_or_empty(pPLIC(ig,jg,kg,:),pVF(ig,jg,kg,1))
-                        call set_to_full_or_empty(pPIC(ig,jg,kg,:),pVF(ig,jg,kg,1))
+                        call set_to_full_or_empty(pPIC(ig,jg,kg,1),pVF(ig,jg,kg,1))
                      end if
                   end do; end do; end do
                end if
@@ -3146,6 +3145,7 @@
          real(WP), dimension(3) :: normal,center,lo,hi
          real(WP) :: m000,m100,m010,m001,temp,t0
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
+         type(pic_container), dimension(:,:,:,:), contiguous, pointer :: pPIC
          logical :: flip
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
@@ -3167,12 +3167,14 @@
             pCL=>this%CL%dataptr(mfi)
             pCG=>this%CG%dataptr(mfi)
             pPLIC=>this%PLIC%dataptr(mfi)
+            pPIC=>this%PIC%dataptr(mfi)
             ! Loop over interior cells
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Handle full cells: set trivial plane
                if (pVF(i,j,k,1).lt.VFlo.or.pVF(i,j,k,1).gt.VFhi) then
                   call set_to_full_or_empty(pPLIC(i,j,k,:),pVF(i,j,k,1))
+                  call set_to_full_or_empty(pPIC(i,j,k,1),pVF(i,j,k,1))
                   cycle
                end if
                ! Liquid-gas symmetry
@@ -3257,6 +3259,7 @@
                hi=[this%amr%xlo+real(i+1,WP)*dx,this%amr%ylo+real(j+1,WP)*dy,this%amr%zlo+real(k+1,WP)*dz]
                ! Store PLIC plane
                call set_to_one_plane(pPLIC(i,j,k,:),[normal(1),normal(2),normal(3)],get_plane_dist(normal,lo,hi,pVF(i,j,k,1)))
+               call set_to_one_plane(pPIC(i,j,k,1),pPLIC(i,j,k,1:3),pPLIC(i,j,k,4))
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
@@ -3686,7 +3689,7 @@
             if (update_smesh) then
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   ! Skip cells with no interface
-                  if (is_full(pPIC(i,j,k,:)).or.is_empty(pPIC(i,j,k,:))) cycle
+                  if (is_full(pPIC(i,j,k,1)).or.is_empty(pPIC(i,j,k,1))) cycle
                   ! Construct local cell and construct quadratic surface approximation
                   lo=[this%amr%xlo+real(i  ,WP)*dx,this%amr%ylo+real(j  ,WP)*dy,this%amr%zlo+real(k  ,WP)*dz]
                   hi=[this%amr%xlo+real(i+1,WP)*dx,this%amr%ylo+real(j+1,WP)*dy,this%amr%zlo+real(k+1,WP)*dz]
@@ -3763,8 +3766,8 @@
             bx=mfi%growntilebox(this%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Skip full and empty cells
-               if (is_full(pPIC(i,j,k,:)).or.is_empty(pPIC(i,j,k,:))) then
-                  if (is_full(pPIC(i,j,k,:))) then
+               if (is_full(pPIC(i,j,k,1)).or.is_empty(pPIC(i,j,k,1))) then
+                  if (is_full(pPIC(i,j,k,1))) then
                      pVF(i,j,k,1)=1.0_WP
                   else
                      pVF(i,j,k,1)=0.0_WP
@@ -3781,7 +3784,7 @@
                if (.not.isTypeDefined(pPIC(i,j,k,1))) then
                   print *, "Interface at ", i,j,k, " has no type"
                end if      
-               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,:),vol_liq,vol_gas,bary_liq,bary_gas)
+               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,1),vol_liq,vol_gas,bary_liq,bary_gas)
                ! Update VF and barycenters
                pVF(i,j,k,1)=vol_liq/cell_vol
                pCL(i,j,k,1:3)=bary_liq
@@ -3884,8 +3887,8 @@
             bx=mfi%growntilebox(this%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Fast-track pure cells
-               if      (is_full (pPIC(i,j,k,:))) then; pSubVF(i,j,k,1:6)=1.0_WP; cycle
-               else if (is_empty(pPIC(i,j,k,:))) then; pSubVF(i,j,k,1:6)=0.0_WP; cycle
+               if      (is_full (pPIC(i,j,k,1))) then; pSubVF(i,j,k,1:6)=1.0_WP; cycle
+               else if (is_empty(pPIC(i,j,k,1))) then; pSubVF(i,j,k,1:6)=0.0_WP; cycle
                end if
                ! Precompute hex bounds
                xlo=this%amr%xlo+real(i,WP)*dx; xhi=this%amr%xlo+real(i+1,WP)*dx; xcc=0.5_WP*(xlo+xhi)
@@ -3897,27 +3900,27 @@
                end if      
                ! SubVF(1)=x-lo half 
                ptlo=[xlo,ylo,zlo]; pthi=[xcc,yhi,zhi]
-               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,:),vol_liq,vol_gas,bary_liq,bary_gas)
+               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,1),vol_liq,vol_gas,bary_liq,bary_gas)
                pSubVF(i,j,k,1)=vol_liq/half_vol
                ! SubVF(2)=x-hi half
                ptlo=[xcc,ylo,zlo]; pthi=[xhi,yhi,zhi]
-               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,:),vol_liq,vol_gas,bary_liq,bary_gas)
+               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,1),vol_liq,vol_gas,bary_liq,bary_gas)
                pSubVF(i,j,k,2)=vol_liq/half_vol
                ! SubVF(3)=y-lo half
                ptlo=[xlo,ylo,zlo]; pthi=[xhi,ycc,zhi]
-               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,:),vol_liq,vol_gas,bary_liq,bary_gas)
+               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,1),vol_liq,vol_gas,bary_liq,bary_gas)
                pSubVF(i,j,k,3)=vol_liq/half_vol
                ! SubVF(4)=y-hi half
                ptlo=[xlo,ycc,zlo]; pthi=[xhi,yhi,zhi]
-               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,:),vol_liq,vol_gas,bary_liq,bary_gas)
+               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,1),vol_liq,vol_gas,bary_liq,bary_gas)
                pSubVF(i,j,k,4)=vol_liq/half_vol
                ! SubVF(5)=z-lo half
                ptlo=[xlo,ylo,zlo]; pthi=[xhi,yhi,zcc]
-               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,:),vol_liq,vol_gas,bary_liq,bary_gas)
+               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,1),vol_liq,vol_gas,bary_liq,bary_gas)
                pSubVF(i,j,k,5)=vol_liq/half_vol
                ! SubVF(6)=z-hi half
                ptlo=[xlo,ylo,zcc]; pthi=[xhi,yhi,zhi]
-               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,:),vol_liq,vol_gas,bary_liq,bary_gas)
+               call cut_rectcub_pic(ptlo,pthi,pPIC(i,j,k,1),vol_liq,vol_gas,bary_liq,bary_gas)
                pSubVF(i,j,k,6)=vol_liq/half_vol
             end do; end do; end do
          end do
@@ -4391,12 +4394,12 @@
             bary_tot=0.25_WP*(mytet(:,1)+mytet(:,2)+mytet(:,3)+mytet(:,4))
 
             ! Pure cell shortcut
-            if (is_full(pPICold(i0,j0,k0,:))) then
+            if (is_full(pPICold(i0,j0,k0,1))) then
                ! Pure liquid
                myflux( 1 )=vol_tot
                myflux(3:5)=vol_tot*bary_tot
                return
-            else if (is_empty(pPICold(i0,j0,k0,:))) then
+            else if (is_empty(pPICold(i0,j0,k0,1))) then
                ! Pure gas
                myflux( 2 )=vol_tot
                myflux(6:8)=vol_tot*bary_tot
@@ -4408,7 +4411,7 @@
                print *, "Interface at ", i0,j0,k0, " has no type"
             end if      
 
-            call cut_tet_pic(mytet,pPICold(i0,j0,k0,:),VF0,vol_tot,bary_tot,myflux)
+            call cut_tet_pic(mytet,pPICold(i0,j0,k0,1),VF0,vol_tot,bary_tot,myflux)
             
          end function tet2flux_plic
          

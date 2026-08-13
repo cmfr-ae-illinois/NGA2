@@ -1345,7 +1345,7 @@ contains
          
          ! Pure cell shortcut
 #ifdef USE_IRL
-         if (is_full(pPICold(i0,j0,k0,:))) then
+         if (is_full(pPICold(i0,j0,k0,1))) then
 #else
          if (pPICold(i0,j0,k0,4).gt.+1.0e9_WP) then
 #endif
@@ -1356,7 +1356,7 @@ contains
             myQflux=vol_tot*this%rhoL*pQold(i0,j0,k0,1:3)
             return
 #ifdef USE_IRL
-         else if (is_empty(pPICold(i0,j0,k0,:))) then
+         else if (is_empty(pPICold(i0,j0,k0,1))) then
 #else
          else if (pPICold(i0,j0,k0,4).lt.-1.0e9_WP) then
 #endif
@@ -1372,7 +1372,7 @@ contains
          crossed_plic=.true.
          
 #ifdef USE_IRL
-         call cut_tet_pic(mytet,pPICold(i0,j0,k0,:),VF0,vol_tot,bary_tot,myVflux)
+         call cut_tet_pic(mytet,pPICold(i0,j0,k0,1),VF0,vol_tot,bary_tot,myVflux)
 #else
          ! Get PLIC from this cell
          normal=pPICold(i0,j0,k0,1:3)
