@@ -8,6 +8,9 @@ module amrmpinc_class
    use amrmg_class,      only: amrmg
    use amrvof_class,     only: VFlo,VFhi,vol_eps,BC_LIQ,BC_GAS,BC_REFLECT,BC_USER
    use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
+#ifdef USE_IRL
+   use amrpic_class,     only: picmfab,pic_container
+#endif
    implicit none
    private
 
@@ -769,7 +772,11 @@ contains
       ! Shared variables for internal functions
       real(WP) :: dx,dy,dz,dxi,dyi,dzi                               ! Needed for SL transport
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW  ! Velocity used for project
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pPLICold  ! PLICold used in tet2flux_plic
+#ifdef USE_IRL
+      type(pic_container), dimension(:,:,:,:), contiguous, pointer :: pPICold  ! PLICold used in tet2flux_plic
+#else
+      real(WP),            dimension(:,:,:,:), contiguous, pointer :: pPICold  ! PLICold used in tet2flux_plic
+#endif
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQold     ! Qold used in tet2flux_plic
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVFold    ! VFold used in tet2flux_plic
       logical :: crossed_plic ! Used in tet2flux/tet2flux_plic
@@ -818,7 +825,11 @@ contains
          call this%amr%mfiter_build(lvl=lvl,mfi=mfi)
          do while (mfi%next())
             ! Get data pointers: PLICold, Qold, VFold, band, velocity, fluxes
-            pPLICold=>this%PLICold%dataptr(mfi)
+#ifdef USE_IRL
+            pPICold=>this%PICold%dataptr(mfi)
+#else
+            pPICold=>this%PLICold%dataptr(mfi)
+#endif
             pQold   =>this%Qold%mf(lvl)%dataptr(mfi)
             pVFold  =>this%VFold%mf(lvl)%dataptr(mfi)
             pBand   =>band%dataptr(mfi)
@@ -1299,6 +1310,9 @@ contains
       !> Cut tet by PLIC and compute volume + conserved variable fluxes
       subroutine tet2flux_plic(mytet,i0,j0,k0,myVflux,myQflux)
          use amrvof_geometry, only: cut_v1,cut_v2,cut_vtet,cut_ntets,cut_nvert,cut_nntet,tet_vol
+#ifdef USE_IRL
+         use amrpic_class,    only: is_full,is_empty,cut_tet_pic
+#endif
          !use messager, only: die
          implicit none
          real(WP), dimension(3,4), intent(in) :: mytet
@@ -1330,14 +1344,22 @@ contains
          bary_tot=0.25_WP*(mytet(:,1)+mytet(:,2)+mytet(:,3)+mytet(:,4))
          
          ! Pure cell shortcut
-         if (pPLICold(i0,j0,k0,4).gt.+1.0e9_WP) then
+#ifdef USE_IRL
+         if (is_full(pPICold(i0,j0,k0,1))) then
+#else
+         if (pPICold(i0,j0,k0,4).gt.+1.0e9_WP) then
+#endif
             ! Pure liquid
             myVflux( 1 )=vol_tot
             myVflux(3:5)=vol_tot*bary_tot
             ! Q flux: pure liquid momentum
             myQflux=vol_tot*this%rhoL*pQold(i0,j0,k0,1:3)
             return
-         else if (pPLICold(i0,j0,k0,4).lt.-1.0e9_WP) then
+#ifdef USE_IRL
+         else if (is_empty(pPICold(i0,j0,k0,1))) then
+#else
+         else if (pPICold(i0,j0,k0,4).lt.-1.0e9_WP) then
+#endif
             ! Pure gas
             myVflux( 2 )=vol_tot
             myVflux(6:8)=vol_tot*bary_tot
@@ -1349,9 +1371,12 @@ contains
          ! If we get here, we ARE cutting by a PLIC plane
          crossed_plic=.true.
          
+#ifdef USE_IRL
+         call cut_tet_pic(mytet,pPICold(i0,j0,k0,1),VF0,vol_tot,bary_tot,myVflux)
+#else
          ! Get PLIC from this cell
-         normal=pPLICold(i0,j0,k0,1:3)
-         dist=pPLICold(i0,j0,k0,4)
+         normal=pPICold(i0,j0,k0,1:3)
+         dist=pPICold(i0,j0,k0,4)
          
          ! Compute signed distance to plane for each vertex
          dd(1)=normal(1)*mytet(1,1)+normal(2)*mytet(2,1)+normal(3)*mytet(3,1)-dist
@@ -1407,7 +1432,7 @@ contains
             myVflux( 2 )=vol_tot-myVflux( 1 )
             myVflux(6:8)=vol_tot*bary_tot-myVflux(3:5)
          end if
-
+#endif
          ! Compute Q flux from Qold
          myQflux=(this%rhoL*myVflux(1)+this%rhoG*myVflux(2))*pQold(i0,j0,k0,1:3)
 

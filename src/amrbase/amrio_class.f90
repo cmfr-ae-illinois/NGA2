@@ -7,6 +7,9 @@ module amrio_class
    use amrgrid_class,    only: amrgrid
    use amrdata_class,    only: amrdata
    use amrex_amr_module, only: amrex_multifab
+#ifdef USE_IRL
+   use amrex_sepunionmfab_module, only: picmfab => amrex_sepunionmfab
+#endif
    implicit none
    private
 
@@ -27,6 +30,16 @@ module amrio_class
       type(mfab_node), pointer :: next => null()      !< Next in list
    end type mfab_node
 
+#ifdef USE_IRL
+   !> Linked list node for registered raw pic multifab (single-level)
+   type :: picmfab_node
+      type(picmfab), pointer :: ptr => null()  !< Pointer to piecewise interface calculation (pic) multifab
+      character(len=str_medium) :: name               !< Name for this data
+      integer :: level                                !< Level this multifab lives on
+      type(picmfab_node), pointer :: next => null()   !< Next in list
+   end type picmfab_node
+#endif
+
    !> Linked list node for scalar metadata (pointer to live variable)
    type :: scalar_node
       character(len=str_medium) :: name           !< Name for this scalar
@@ -46,20 +59,30 @@ module amrio_class
       class(amrgrid), pointer :: amr => null()    !< Pointer to AMR grid
       type(data_node), pointer :: first => null() !< First registered data
       integer :: ndata = 0                        !< Number of registered data
-      type(mfab_node), pointer :: first_mfab => null()     !< First registered raw multifab
-      integer :: nmfab = 0                         !< Number of registered raw multifabs
-      type(scalar_node), pointer :: first_scalar => null() !< First registered scalar (for writing)
+      type(mfab_node), pointer :: first_mfab => null()               !< First registered raw multifab
+      integer :: nmfab = 0                        !< Number of registered raw multifabs
+#ifdef USE_IRL
+      type(picmfab_node), pointer :: first_picmfab => null()         !< First registered raw pic multifab
+      integer :: npicmfab = 0                     !< Number of registered raw pic multifabs
+#endif
+      type(scalar_node), pointer :: first_scalar => null()           !< First registered scalar (for writing)
       integer :: nscalar = 0                      !< Number of registered scalars
       type(read_scalar_node), pointer :: first_read_scalar => null() !< Scalars read from file
    contains
       procedure :: initialize                     !< Initialize with grid and I/O aggregation
       procedure :: add_data                       !< Register an amrdata field (all levels)
       procedure :: add_mfab                       !< Register a raw multifab (single level)
+#ifdef USE_IRL
+      procedure :: add_picmfab                    !< Register a raw pic multifab (single level)
+#endif
       procedure :: add_scalar                     !< Register a scalar (pointer to live variable)
       procedure :: write                          !< Write all registered to checkpoint
       procedure :: read_header                    !< Read checkpoint header (time, step, fields)
       procedure :: read_data                      !< Read an amrdata field from checkpoint
       procedure :: read_mfab                      !< Read a raw multifab from checkpoint
+#ifdef USE_IRL
+      procedure :: read_picmfab                   !< Read a raw pic multifab from checkpoint
+#endif
       procedure :: get_scalar                     !< Get a scalar value from checkpoint
       procedure :: finalize                       !< Clean up registered data list
    end type amrio
@@ -135,6 +158,34 @@ contains
       this%nmfab = this%nmfab + 1
    end subroutine add_mfab
 
+#ifdef USE_IRL
+   !> Register a raw pic multifab for checkpointing at a specific level
+   subroutine add_picmfab(this, mfab, name, level)
+      implicit none
+      class(amrio), intent(inout) :: this
+      type(picmfab), target, intent(in) :: mfab
+      character(len=*), intent(in) :: name
+      integer, intent(in) :: level
+      type(picmfab_node), pointer :: new_node, current
+      ! Create new node
+      allocate(new_node)
+      new_node%ptr => mfab
+      new_node%name = trim(name)
+      new_node%level = level
+      nullify(new_node%next)
+      ! Add to end of list
+      if (.not.associated(this%first_picmfab)) then
+         this%first_picmfab => new_node
+      else
+         current => this%first_picmfab
+         do while (associated(current%next))
+            current => current%next
+         end do
+         current%next => new_node
+      end if
+      this%npicmfab = this%npicmfab + 1
+   end subroutine add_picmfab
+#endif
 
    !> Register a scalar for checkpointing (pointer to live variable)
    subroutine add_scalar(this, name, value)
@@ -170,6 +221,9 @@ contains
       use iso_c_binding,   only: c_null_char,c_associated
       use amrex_amr_module,only: amrex_boxarray,amrex_box
       use amrex_interface, only: amrmfab_vismf_write,amrcheckpoint_prebuild_dirs,amrcheckpoint_mfab_prefix
+#ifdef USE_IRL
+      use amrex_sepunionmfab_module, only: picmfab_write => amrex_sepunionmfab_write
+#endif
       use messager,        only: log,warn
       use parallel,        only: MPI_REAL_WP
       use mpi_f08,         only: MPI_BCAST,MPI_INTEGER
@@ -184,6 +238,9 @@ contains
       character(len=str_medium) :: header_file
       type(data_node), pointer :: current
       type(mfab_node), pointer :: mfcurrent
+#ifdef USE_IRL
+      type(picmfab_node), pointer :: picmfcurrent
+#endif
       type(scalar_node), pointer :: scurrent
       type(amrex_boxarray) :: ba
       type(amrex_box) :: bx
@@ -264,6 +321,22 @@ contains
          end if
          mfcurrent => mfcurrent%next
       end do
+
+#ifdef USE_IRL
+      ! Write raw multifab data (single level each)
+      picmfcurrent => this%first_picmfab
+      do while (associated(picmfcurrent))
+         if (c_associated(picmfcurrent%ptr%p)) then
+            call amrcheckpoint_mfab_prefix(mfab_path, len(mfab_path), picmfcurrent%level, &
+               trim(dirname)//c_null_char, 'Level_'//c_null_char, &
+               trim(picmfcurrent%name)//c_null_char)
+            call picmfab_write(picmfcurrent%ptr, trim(mfab_path)//c_null_char)
+         else
+            if (this%amr%amRoot) call warn('[amrio] skipping unbuilt picmfab: '//trim(picmfcurrent%name))
+         end if
+         picmfcurrent => picmfcurrent%next
+      end do
+#endif
 
       if (this%amr%amRoot) call log('Wrote checkpoint: '//trim(dirname)//' ('// &
          trim(adjustl(itoa(this%ndata)))//' fields)')
@@ -430,6 +503,31 @@ contains
       if (this%amr%amRoot) call log('Read checkpoint mfab: '//trim(dataname))
    end subroutine read_mfab
 
+#ifdef USE_IRL
+   !> Read a raw pic multifab from checkpoint directory at a specific level
+   subroutine read_picmfab(this,dirname,mfab,dataname,level)
+      use string,          only: str_long
+      use iso_c_binding,   only: c_null_char
+      use amrex_interface, only: amrcheckpoint_mfab_prefix
+#ifdef USE_IRL
+      use amrex_sepunionmfab_module, only: picmfab_read => amrex_sepunionmfab_read
+#endif
+      use messager,        only: log
+      implicit none
+      class(amrio), intent(inout) :: this
+      character(len=*), intent(in) :: dirname
+      type(picmfab), intent(inout) :: mfab
+      character(len=*), intent(in) :: dataname
+      integer, intent(in) :: level
+      character(len=str_long) :: mfab_path
+      ! Read MultiFab data at specified level
+      call amrcheckpoint_mfab_prefix(mfab_path, len(mfab_path), level, &
+         trim(dirname)//c_null_char, 'Level_'//c_null_char, &
+         trim(dataname)//c_null_char)
+      call picmfab_read(mfab, trim(mfab_path)//c_null_char)
+      if (this%amr%amRoot) call log('Read checkpoint picmfab: '//trim(dataname))
+   end subroutine read_picmfab
+#endif
 
    !> Get a scalar value by name (searches read scalar list from read_header)
    subroutine get_scalar(this, name, value, found)

@@ -1,12 +1,19 @@
 # Add appropriate IRL includes and libraries
 ifdef IRL_DIR
+  F90FLAGS          += -DUSE_IRL
   INCLUDE_LOCATIONS += $(IRL_DIR)/include/irl_fortran
   LIBRARY_LOCATIONS += $(IRL_DIR)/lib
   is_gnu = $(shell expr `mpicc --version | awk '{print substr($$1,1,3); exit}'` = 'gcc')
   ifeq ($(is_gnu), 1)
-    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lstdc++
+    LIBRARIES += -lirl_fortran -lirl_c -lirl -lstdc++
   else
-    LIBRARIES += -lirl_fortran -lirl_c -lirl -labsl_all -lc++
+    LIBRARIES += -lirl_fortran -lirl_c -lirl -lc++
+  endif
+  # Link to ABSEIL only if IRL was compiled using ABSEIL
+  IRL_ABSEIL_LIB_FILE := $(IRL_DIR)/lib/libabsl_all.a
+  abseil_lib_exists := $(or $(and $(wildcard $(IRL_ABSEIL_LIB_FILE)),1),0)
+  ifeq ($(abseil_lib_exists),1)    
+    LIBRARIES += -labsl_all
   endif
   ifeq ($(os_name), Darwin)
     LIBRARIES += -framework CoreFoundation

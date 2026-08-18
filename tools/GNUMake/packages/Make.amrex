@@ -2,6 +2,8 @@
 ifdef AMREX_DIR
   INCLUDE_LOCATIONS += $(AMREX_DIR)/include
   LIBRARY_LOCATIONS += $(AMREX_DIR)/lib
+  # Compiler wrongly believes that AmReX routines are used recursively; forcing preprocessing
+  F90FLAGS += -frecursive -cpp -traditional-cpp 
   # AMReX requires C++20
   CXXFLAGS += -std=c++20
   # Add stdc++
