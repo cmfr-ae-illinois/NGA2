@@ -9,28 +9,24 @@ module surfmesh_class
    
    !> Surface mesh object
    type :: surfmesh
-      character(len=str_medium) :: name='UNNAMED_SURFMESH'              !< Name for the surface mesh
-      integer :: nVert, nPolyVert                                       !< Number of vertices
-      real(WP), dimension(:), allocatable :: xVert                      !< X position of the vertices - size=nVert
-      real(WP), dimension(:), allocatable :: yVert                      !< Y position of the vertices - size=nVert
-      real(WP), dimension(:), allocatable :: zVert                      !< Z position of the vertices - size=nVert
-      real(WP), dimension(:), allocatable :: wVert                      !< Rational weight of the vertices - size=nVert
-      integer :: nPoly                                                  !< Number of polygons
-      integer,  dimension(:), allocatable :: polySize                   !< Size of polygons - size=nPoly
-      integer,  dimension(:), allocatable :: polyConn                   !< Connectivity - size=sum(polySize)
-      integer :: nBezierTri                                             !< Number of quadratic rational Bezier triangles
-      integer,  dimension(:), allocatable :: bezierTriConn              !< Connectivity - size=6*nBezierTri
-      integer :: nvar=0                                                 !< Number of surface variables stored (default=0)
-      real(WP), dimension(:,:), allocatable :: polyVar, triVar          !< Surface variable storage
+      character(len=str_medium) :: name='UNNAMED_SURFMESH' !< Name for the surface mesh
+      integer :: nVert                                     !< Number of vertices
+      real(WP), dimension(:), allocatable :: xVert         !< X position of the vertices - size=nVert
+      real(WP), dimension(:), allocatable :: yVert         !< Y position of the vertices - size=nVert
+      real(WP), dimension(:), allocatable :: zVert         !< Z position of the vertices - size=nVert
+      real(WP), dimension(:), allocatable :: wVert         !< rational weight of the vertices - size=nVert
+      integer :: nPoly                                     !< Number of polygons
+      integer,  dimension(:), allocatable :: polySize      !< Size of polygons - size=nPoly
+      integer,  dimension(:), allocatable :: polyConn      !< Connectivity - size=sum(polySize)
+      integer :: nBezierTri                                !< Number of quadratic rational Bezier triangles
+      integer,  dimension(:), allocatable :: bezierTriConn !< Connectivity - size=6*nBezierTri
+      integer :: nvar                                                   !< Number of surface variables stored
+      real(WP), dimension(:,:), allocatable :: var                      !< Surface variable storage
       character(len=str_medium), dimension(:), allocatable :: varname   !< Name of surface variable fields
-      logical :: vtu_format=.false.                                     !< Flag for I/O formating
    contains
-      procedure :: reset                                          !< Reset surface mesh to zero size
-      procedure :: set_size                                       !< Set surface mesh to provided size
-      procedure :: finalize                                       !< Finalize surfmesh object
-      procedure :: add_polygon                                    !< Append a polygon (grows arrays as needed)
-      procedure :: add_bezier_tri                                 !< Append a bezier triangle (grows arrays as needed)
-      procedure :: write_as_vtu                                   !< Sets I/O formating flag
+      procedure :: reset                                   !< Reset surface mesh to zero size
+      procedure :: set_size                                !< Set surface mesh to provided size
+      procedure :: finalize                                !< Finalize surfmesh object
    end type surfmesh
    
    
@@ -65,7 +61,6 @@ contains
       
       ! Default to 0 size
       self%nVert=0
-      self%nPolyVert=0
       self%nPoly=0
       self%nBezierTri=0
       
@@ -111,7 +106,7 @@ contains
       end block read_header
       
       ! Resize my surfmesh
-      call self%set_size(nvert=self%nVert,npolyvert=self%nVert,npoly=self%nPoly,nbeziertri=self%nBezierTri)
+      call self%set_size(nvert=self%nVert,npoly=self%nPoly,nbeziertri=self%nBezierTri)
       
       ! Read the ply vertices
       read_vertices: block
@@ -198,7 +193,6 @@ contains
 
       ! Default to 0 size
       self%nVert=0
-      self%nPolyVert=0
       self%nPoly=0
       self%nBezierTri=0
 
@@ -244,7 +238,7 @@ contains
       end block read_header
       
       ! Resize my surfmesh
-      call self%set_size(nvert=self%nVert,npolyvert=self%nVert,npoly=self%nPoly,nbeziertri=self%nBezierTri)
+      call self%set_size(nvert=self%nVert,npoly=self%nPoly,nbeziertri=self%nBezierTri)
       
       ! Read the ply vertices
       read_vertices: block
@@ -326,7 +320,6 @@ contains
       if (present(name)) self%name=trim(adjustl(name))
       ! Default to 0 size
       self%nVert=0
-      self%nPolyVert=0
       self%nPoly=0
       self%nBezierTri=0
       ! Initialize additional variables
@@ -340,7 +333,7 @@ contains
    subroutine reset(this)
       implicit none
       class(surfmesh), intent(inout) :: this
-      this%nPoly=0; this%nVert=0; this%nPolyVert=0; this%nBezierTri=0
+      this%nPoly=0; this%nVert=0; this%nBezierTri=0
       if (allocated(this%xVert))         deallocate(this%xvert)
       if (allocated(this%yVert))         deallocate(this%yvert)
       if (allocated(this%zVert))         deallocate(this%zvert)
@@ -348,24 +341,22 @@ contains
       if (allocated(this%polySize))      deallocate(this%polySize)
       if (allocated(this%polyConn))      deallocate(this%polyConn)
       if (allocated(this%bezierTriConn)) deallocate(this%bezierTriConn)
-      if (allocated(this%polyVar))       deallocate(this%polyVar)
-      if (allocated(this%triVar))        deallocate(this%triVar)
+      if (allocated(this%var))           deallocate(this%var)
    end subroutine reset
    
    
    ! Set mesh storage size - leave connectivity alone
-   subroutine set_size(this,nvert,npolyvert,npoly,nbeziertri)
+   subroutine set_size(this,nvert,npoly,nbeziertri)
       implicit none
       class(surfmesh), intent(inout) :: this
-      integer, intent(in) :: nvert,npolyvert,npoly,nbeziertri
-      this%nPoly=npoly; this%nVert=nvert; this%nPolyVert=npolyvert; this%nBezierTri=nbeziertri
+      integer, intent(in) :: nvert,npoly,nbeziertri
+      this%nPoly=npoly; this%nVert=nvert; this%nBezierTri=nbeziertri
       allocate(this%xVert   (this%nVert))
       allocate(this%yVert   (this%nVert))
       allocate(this%zVert   (this%nVert))
       allocate(this%wVert   (this%nVert))
       allocate(this%polySize(this%nPoly))
-      allocate(this%polyVar (this%nvar,this%nPoly))
-      allocate(this%triVar  (this%nvar,this%nBezierTri))
+      allocate(this%var     (this%nvar,this%nPoly+this%nBezierTri))
    end subroutine set_size
    
    
@@ -379,176 +370,5 @@ contains
       this%name='UNNAMED_SURFMESH'
    end subroutine finalize
    
-      
-   !> Append a single polygon to the surface mesh
-   !> Grows internal arrays as needed using doubling strategy
-   !> Optional vardata provides nvar surface variable values for the polygon
-   subroutine add_polygon(this, nv, verts, vardata)
-      implicit none
-      class(surfmesh), intent(inout) :: this
-      integer, intent(in) :: nv                       !< Number of vertices
-      real(WP), dimension(3,nv), intent(in) :: verts  !< Polygon vertices (3 x nv)
-      real(WP), dimension(this%nvar), intent(in), optional :: vardata !< Per-polygon surface variables
-      real(WP), dimension(:), allocatable :: new_x, new_y, new_z, new_w
-      real(WP), dimension(:,:), allocatable :: new_var
-      integer, dimension(:), allocatable :: new_size, new_conn
-      integer :: new_cap, i
-
-      ! Initialize arrays if not allocated
-      if (.not.allocated(this%xVert)) then
-         allocate(this%xVert(1000), this%yVert(1000), this%zVert(1000), this%wVert(1000))
-         allocate(this%polySize(1000), this%polyConn(1000), this%bezierTriConn(1000))
-         this%nVert      = 0
-         this%nPolyVert  = 0
-         this%nPoly      = 0
-         this%nBezierTri = 0
-      end if
-      if (this%nvar .gt. 0 .and. .not.allocated(this%polyVar)) allocate(this%polyVar(this%nvar, 1000))
-
-      ! Grow vertex arrays if needed
-      if (this%nVert + nv .gt. size(this%xVert)) then
-         new_cap = max(2*size(this%xVert), this%nVert + nv)
-         allocate(new_x(new_cap), new_y(new_cap), new_z(new_cap), new_w(new_cap))
-         new_x(1:this%nVert) = this%xVert(1:this%nVert)
-         new_y(1:this%nVert) = this%yVert(1:this%nVert)
-         new_z(1:this%nVert) = this%zVert(1:this%nVert)
-         new_w(1:this%nVert) = this%wVert(1:this%nVert)
-         call move_alloc(new_x, this%xVert)
-         call move_alloc(new_y, this%yVert)
-         call move_alloc(new_z, this%zVert)
-         call move_alloc(new_w, this%wVert)
-      end if
-
-      ! Grow polyConn array if needed
-      if (this%nPolyVert + nv .gt. size(this%polyConn)) then
-         new_cap = max(2*size(this%polyConn), this%nPolyVert + nv)
-         allocate(new_conn(new_cap))
-         new_conn(1:this%nPolyVert) = this%polyConn(1:this%nPolyVert)
-         call move_alloc(new_conn, this%polyConn)
-      end if
-
-      ! Grow polySize and var arrays if needed
-      if (this%nPoly + 1 .gt. size(this%polySize)) then
-         new_cap = 2*size(this%polySize)
-         allocate(new_size(new_cap))
-         new_size(1:this%nPoly) = this%polySize(1:this%nPoly)
-         call move_alloc(new_size, this%polySize)
-      end if
-      if (this%nvar .gt. 0 .and. this%nPoly + 1 .gt. size(this%polyVar, 2)) then
-         new_cap = 2*size(this%polyVar, 2)
-         allocate(new_var(this%nvar, new_cap))
-         new_var(:, 1:this%nPoly) = this%polyVar(:, 1:this%nPoly)
-         call move_alloc(new_var, this%polyVar)
-      end if
-
-      ! Append polygon
-      this%nPoly = this%nPoly + 1
-      this%polySize(this%nPoly) = nv
-      do i = 1, nv
-         this%nVert = this%nVert + 1
-         this%nPolyVert = this%nPolyVert + 1
-         this%xVert(this%nVert) = verts(1, i)
-         this%yVert(this%nVert) = verts(2, i)
-         this%zVert(this%nVert) = verts(3, i)
-         this%wVert(this%nVert) = 1.0_WP
-         this%polyConn(this%nPolyVert) = this%nVert
-      end do
-      ! Store per-polygon surface variables
-      if (this%nvar .gt. 0) then
-         if (present(vardata)) then
-            this%polyVar(:, this%nPoly) = vardata
-         else
-            this%polyVar(:, this%nPoly) = 0.0_WP
-         end if
-      end if
-
-   end subroutine add_polygon
-
-   !> Append a single Bezier triangle to the surface mesh
-   !> Grows internal arrays as needed using doubling strategy
-   !> Optional vardata provides nvar surface variable values for the triangle
-   subroutine add_bezier_tri(this, verts, vardata)
-      implicit none
-      class(surfmesh), intent(inout) :: this
-      real(WP), dimension(4,6), intent(in) :: verts  !< Triangle vertices (4 components (x,y,z,w) x 6 vertices)
-      real(WP), dimension(this%nvar), intent(in), optional :: vardata !< Per-polygon surface variables
-      real(WP), dimension(:), allocatable :: new_x, new_y, new_z, new_w
-      real(WP), dimension(:,:), allocatable :: new_var
-      integer, dimension(:), allocatable :: new_conn
-      integer :: new_cap, i
-
-      ! Initialize arrays if not allocated
-      if (.not.allocated(this%xVert)) then
-         allocate(this%xVert(1000), this%yVert(1000), this%zVert(1000), this%wVert(1000))
-         allocate(this%polySize(1000), this%polyConn(1000), this%bezierTriConn(1000))
-         this%nVert      = 0
-         this%nPolyVert  = 0
-         this%nPoly      = 0
-         this%nBezierTri = 0
-      end if
-      if (this%nvar .gt. 0 .and. .not.allocated(this%triVar)) allocate(this%triVar(this%nvar, 1000))
-
-      ! Grow vertex arrays if needed
-      if (this%nVert + 6 .gt. size(this%xVert)) then
-         new_cap = max(2*size(this%xVert), this%nVert + 6)
-         allocate(new_x(new_cap), new_y(new_cap), new_z(new_cap), new_w(new_cap))
-         new_x(1:this%nVert) = this%xVert(1:this%nVert)
-         new_y(1:this%nVert) = this%yVert(1:this%nVert)
-         new_z(1:this%nVert) = this%zVert(1:this%nVert)
-         new_w(1:this%nVert) = this%wVert(1:this%nVert)
-         call move_alloc(new_x, this%xVert)
-         call move_alloc(new_y, this%yVert)
-         call move_alloc(new_z, this%zVert)
-         call move_alloc(new_w, this%wVert)
-      end if
-
-      ! Grow bezierTriConn array if needed
-      if (6*this%nBezierTri+6 .gt. size(this%bezierTriConn)) then
-         new_cap = max(2*size(this%bezierTriConn), 6*this%nBezierTri+6)
-         allocate(new_conn(new_cap))
-         new_conn(1:6*this%nBezierTri) = this%bezierTriConn(1:6*this%nBezierTri)
-         call move_alloc(new_conn, this%bezierTriConn)
-      end if
-
-      ! Grow var arrays if needed
-      if (this%nvar .gt. 0 .and. this%nBezierTri+1 .gt. size(this%triVar, 2)) then
-         new_cap = 2*size(this%triVar, 2)
-         allocate(new_var(this%nvar, new_cap))
-         new_var(:, 1:this%nBezierTri) = this%triVar(:, 1:this%nBezierTri)
-         call move_alloc(new_var, this%triVar)
-      end if
-
-      ! Append Bezier triangle
-      this%nBezierTri = this%nBezierTri + 1
-      do i = 1, 6
-         this%nVert = this%nVert + 1
-         this%xVert(this%nVert) = verts(1, i)
-         this%yVert(this%nVert) = verts(2, i)
-         this%zVert(this%nVert) = verts(3, i)
-         this%wVert(this%nVert) = verts(4, i)
-         this%bezierTriConn((this%nBezierTri-1)*6+i) = this%nVert
-      end do
-
-      ! Store per-polygon surface variables
-      if (this%nvar .gt. 0) then
-         if (present(vardata)) then
-            this%triVar(:, this%nBezierTri) = vardata
-         else
-            this%triVar(:, this%nBezierTri) = 0.0_WP
-         end if
-      end if
-
-   end subroutine add_bezier_tri
    
-   subroutine write_as_vtu(this,flag)
-      implicit none
-      class(surfmesh), intent(inout) :: this
-      logical, intent(in), optional :: flag
-      if (present(flag)) then
-         this%vtu_format=flag
-      else
-         this%vtu_format=.true.
-      end if
-   end subroutine write_as_vtu
-
 end module surfmesh_class
