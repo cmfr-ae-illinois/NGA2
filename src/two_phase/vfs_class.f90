@@ -4156,7 +4156,7 @@ contains
       integer(IRL_SignedIndex_t) :: i,j,k
       integer :: ind,ii,jj,kk,icenter
       type(JibbenNeigh_type) :: jibben_neighborhood
-      type(PUNeigh_type) :: pu_neighborhood
+      type(PUNeigh_RectCub_type) :: pu_neighborhood
       type(RectCub_type) :: cell
       logical :: found_center
       type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: jibbeninterface, puinterface, puneighborhoodinterface, finalinterface
@@ -4345,7 +4345,7 @@ contains
                            else if (this%VF(ii,jj,kk).gt.0.9_WP) then
                               vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
                            end if
-                           call addMember(pu_neighborhood,puneighborhoodinterface(ii,jj,kk),centroid,area_weight*vfrac_weight)
+                           call addMember(pu_neighborhood,centroid,area_weight*vfrac_weight,puneighborhoodinterface(ii,jj,kk),0.0_WP)
                            ! Trap and set stencil center
                            if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                               icenter=ind
@@ -4434,7 +4434,7 @@ contains
       integer(IRL_SignedIndex_t) :: i,j,k
       integer :: ind,ii,jj,kk,icenter
       type(JibbenNeigh_type) :: jibben_neighborhood
-      type(PUNeigh_type) :: pu_neighborhood
+      type(PUNeigh_RectCub_type) :: pu_neighborhood
       type(RectCub_type) :: cell
       logical :: found_center
       type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: jibbeninterface, puinterface, puneighborhoodinterface, finalinterface
@@ -4616,7 +4616,7 @@ contains
                            else if (this%VF(ii,jj,kk).gt.0.9_WP) then
                               vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
                            end if
-                           call addMember(pu_neighborhood,puneighborhoodinterface(ii,jj,kk),centroid,area_weight*vfrac_weight)
+                           call addMember(pu_neighborhood,centroid,area_weight*vfrac_weight,puneighborhoodinterface(ii,jj,kk),0.0_WP)
                            ! Trap and set stencil center
                            if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                               icenter=ind
@@ -4699,7 +4699,7 @@ contains
       class(vfs), intent(inout) :: this
       integer(IRL_SignedIndex_t) :: i,j,k
       integer :: ind,ii,jj,kk,icenter
-      type(PUNeigh_type) :: pu_neighborhood
+      type(PUNeigh_RectCub_type) :: pu_neighborhood
       type(RectCub_type) :: cell
       logical :: found_center
       type(SeparatorVariant_type),  dimension(:,:,:), allocatable :: puinterface
@@ -4763,7 +4763,7 @@ contains
                            else if (this%VF(ii,jj,kk).gt.0.9_WP) then
                               vfrac_weight = 0.5_WP - 0.5_WP * cos(10.0_WP * Pi * (1.0_WP - this%VF(ii,jj,kk)))
                            end if
-                           call addMember(pu_neighborhood,this%liquid_gas_interface(ii,jj,kk),centroid,area_weight*vfrac_weight)
+                           call addMember(pu_neighborhood,centroid,area_weight*vfrac_weight,this%liquid_gas_interface(ii,jj,kk),0.0_WP)
                            ! Trap and set stencil center
                            if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                               icenter=ind
