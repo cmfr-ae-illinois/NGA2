@@ -736,7 +736,7 @@ contains
                ! Write surf info if it exists on the processor
                if (surf%ptr%nPoly.gt.0) then
                   cbuff='nsided'       ; write(iunit) cbuff
-                  write(iunit) real(surf%ptr%var(n,:),SP)
+                  write(iunit) real(surf%ptr%polyVar(n,:),SP)
                end if
                ! Close the file
                close(iunit)

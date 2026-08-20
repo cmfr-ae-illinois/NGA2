@@ -684,7 +684,8 @@ contains
                 do n=1,surf%ptr%nvar
                   data_size=ntri*SP+npoly*SP
                   write(iunit) data_size
-                  write(iunit) real(surf%ptr%var(n,:),SP)
+                  write(iunit) real(surf%ptr%triVar(n,:),SP)
+                  write(iunit) real(surf%ptr%polyVar(n,:),SP)
                end do
             end if
             if (rank.eq.this%cfg%nproc-1) then

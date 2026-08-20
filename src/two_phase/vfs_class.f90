@@ -5081,7 +5081,7 @@ contains
       
       ! Reallocate storage and fill out arrays
       if ((np+nbt).gt.0) then
-         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
+         call smesh%set_size(nvert=nv,npolyvert=nv-nqv,npoly=np,nbeziertri=nbt)
          allocate(smesh%polyConn(nv-nqv))
          allocate(smesh%bezierTriConn(6*nbt))
          nv=0; np=0; nbt=0
@@ -5138,7 +5138,7 @@ contains
       else
          ! Add a zero-area triangle if this proc doesn't have one
          np=1; nv=3; nbt=0
-         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
+         call smesh%set_size(nvert=nv,npolyvert=nv,npoly=np,nbeziertri=nbt)
          allocate(smesh%bezierTriConn(6*nbt))
          allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
          smesh%xVert(1:3)=this%cfg%x(this%cfg%imin)
@@ -5212,7 +5212,7 @@ contains
 
       ! Reallocate storage and fill out arrays
       if ((np+nbt).gt.0) then
-         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
+         call smesh%set_size(nvert=nv,npolyvert=nv-nqv,npoly=np,nbeziertri=nbt)
          allocate(smesh%polyConn(nv-nqv))
          allocate(smesh%bezierTriConn(6*nbt))
          nv=0; np=0; nbt=0
@@ -5271,7 +5271,7 @@ contains
       else
          ! Add a zero-area triangle if this proc doesn't have one
          np=1; nv=3
-         call smesh%set_size(nvert=nv,npoly=np,nbeziertri=nbt)
+         call smesh%set_size(nvert=nv,npolyvert=nv,npoly=np,nbeziertri=nbt)
          allocate(smesh%polyConn(smesh%nVert)) ! Also allocate naive connectivity
          smesh%xVert(1:3)=this%cfg%x(this%cfg%imin)
          smesh%yVert(1:3)=this%cfg%y(this%cfg%jmin)

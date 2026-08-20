@@ -450,7 +450,7 @@ contains
                   if (shape.gt.0) then
                      do n=1,shape
                         nbt=nbt+1
-                        smesh%var(var_index,nbt)=A(i,j,k)
+                        smesh%triVar(var_index,nbt)=A(i,j,k)
                      end do
                   end if
                end do
@@ -466,14 +466,14 @@ contains
                         ! Increment polygon counter
                         np=np+1
                         ! Set nplane variable
-                        smesh%var(var_index,nbt+np)=A(i,j,k)
+                        smesh%polyVar(var_index,np)=A(i,j,k)
                      end if
                   end do
                end do
             end do
          end do
       else
-         smesh%var(var_index,1)=1
+         smesh%polyVar(var_index,1)=1
       end if      
       
    end subroutine add_surfgrid_variable
