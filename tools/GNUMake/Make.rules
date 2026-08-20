@@ -31,7 +31,7 @@ endif
 # Rules for building executable #########
 $(executable): $(objForExecs)
 	@echo Linking $@ ...
-	$(SILENT) $(F90) $(F90FLAGS) $(FINAL_CPPFLAGS) $(fincludes) $(LDFLAGS) -o $@ $^ $(libraries)
+	$(SILENT) $(CXX) $(F90FLAGS) $(FINAL_CPPFLAGS) $(fincludes) $(LDFLAGS) -o $@ $^ $(libraries)
 
 
 clean::
