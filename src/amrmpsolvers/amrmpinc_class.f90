@@ -1,5 +1,5 @@
 !> AMR collocated incompressible multiphase solver class
-!> Inherits from amrvof_class
+!> Inherits from amrflow_class
 module amrmpinc_class
    use iso_c_binding,    only: c_ptr,c_loc,c_f_pointer
    use precision,        only: WP
