@@ -71,7 +71,7 @@ module amrmpinc_class
       procedure :: prepare_psolver            !< Prepare pressure solver with new densities
       procedure :: add_pressure               !< Add pressure term consistently to face and cell-centered velocities
       procedure :: add_surface_tension        !< Add surface tension increment consistently to face and cell-centered velocities
-      procedure, private :: apply_face_fluxes !< Apply pre-built face fluxes to both face and cell-centered velocities
+      procedure :: apply_face_fluxes          !< Apply pre-built face fluxes to both face and cell-centered velocities
       ! Physics procedures
       procedure :: get_dQdt                   !< Compute rate of change of Q=UVW
       procedure :: add_vreman                 !< Add Vreman SGS eddy viscosity
@@ -654,7 +654,7 @@ contains
          pSTFx =>STFx(lvl)%dataptr(mfi)
          pSTFy =>STFy(lvl)%dataptr(mfi)
          pSTFz =>STFz(lvl)%dataptr(mfi)
-         ! X-faces
+         ! X-faces - COMMENT ON THIS
          bx=mfi%nodaltilebox(1)
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             mycurv=0.0_WP

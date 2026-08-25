@@ -2,15 +2,17 @@
 module amrist_class
     use precision,        only: WP 
     use mathtools,        only: Pi
-    use geometry,         only: cfg 
     use amrvof_class,     only: VFlo,VFhi,vol_eps,BC_LIQ,BC_GAS,BC_REFLECT,BC_USER
     use amrmg_class,      only: amrmg
     use amrmpflow_class,  only: amrmpflow
+    use amrmpinc_class,    only: amrmpinc
     use amrdata_class,    only: amrdata
     use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
+    use string,            only: str_medium
 #ifdef USE_IRL
     use amrpic_class,      only: picmfab,pic_container
 #endif
+    use irl_fortran_interface
     implicit none
     private
 
@@ -19,34 +21,45 @@ module amrist_class
 
     !> AMR Integral Surface Tension Calculator Type
     type :: amrist
+        ! Name 
+        character(len=str_medium) :: name
+
+        ! Flow Solver
+        class(amrmpinc), pointer :: fsvf
 
         ! Options
         real(WP), dimension(3) :: MarangoniOption
         integer :: SurfaceTensionOption,CurvatureOption,SmoothingOption
         logical :: TwoD
         real(WP) :: PressureOption
+        real(WP) :: PU_spread
 
+        ! Stresses
+        ! Stresses in x direction, then y direction, then z direction. 
+        ! Face dependence is indexed on each stress.
+        type(amrdata) :: ST_x_stresses,ST_y_stresses,ST_z_stresses
+        type(amrdata) :: ST_stresses
     contains 
         procedure :: temp 
         ! Constructor/destructor
-        procedure :: initialize 
-        procedure :: finalize 
+        procedure :: initialize ! Done
+        procedure :: finalize ! Done
 
         ! Physics 
-        procedure :: get_dmomdt
-        procedure :: add_surface_tension_jump 
+        procedure :: get_dQdt ! Done
+        procedure :: add_surface_tension_jump ! Done
         ! Visualization
 
         ! ================== Private 
         ! Momentum Functions
 
         ! Surface Tension Functions
-        procedure, private :: add_integral_surface_tension_jump 
+        procedure, private :: add_integral_surface_tension ! Done
         procedure, private :: add_csf_shift_integral_surface_tension_jump 
 
         ! Integral Surface Tension Methods
-        procedure, private :: update_surface_tension_stresses
-        procedure, private :: update_tension_forces_forces 
+        procedure, private :: update_surface_tension_stresses !Done 
+        procedure, private :: update_tension_forces_forces ! Done
 
         ! Ellipsoid Exact Values
         procedure, private :: update_surface_tension_stresses_ellipsoid
@@ -55,7 +68,7 @@ module amrist_class
         ! Smoothing Functions
 
         ! Helpers 
-        procedure, private :: add_interface_to_PU_neighborhood
+        procedure, private :: add_interface_to_PU_neighborhood ! Done
     end type amrist 
 contains
     subroutine temp(this)
@@ -63,46 +76,413 @@ contains
         print *, "This is a temporary subroutine in the amrist module."
     end subroutine temp
 
-    subroutine initialize(this)
-        class(amrist), intent(inout) :: this
-        print *, "This is the initialize subroutine in the amrist module."
+    ! ============================================================================
+    ! INITIALIZATION / FINALIZATION
+    ! ============================================================================
+
+    subroutine initialize(this,fsvf,name)
+        use amrdata_class, only: interp_const
+        implicit none 
+        class(amrist), target, intent(inout) :: this
+        class(amrmpinc), target, intent(in) :: fsvf 
+        character(len=*), intent(in), optional :: name
+
+        ! IRL REQUIRED
+#ifdef USE_IRL
+            print *, "Creating IST"
+#else
+            print *, "ERROR: amrist require IRL usage"
+            STOP 
+#endif
+        if(present(name)) then 
+            this%name = trim(name) 
+        else 
+            this%name ='UNNAMED_IST'
+        endif
+        ! Store flow solver
+        ! Check if 3 or more ghost layers
+        this%fsvf=>fsvf
+        if(fsvf%nover .lt. 3) then 
+            print *, "WARNING: amrinc object has less than 3 ghost layers. 3 required for AMRIST initializiation"
+        endif
+        ! Initialize AMRData Variables
+        call this%ST_stresses%initialize(fsvf%amr,name='ST_Stresses',ncomp=9,ng=fsvf%nover)
     end subroutine initialize 
 
     subroutine finalize(this)
+        implicit none
         class(amrist), intent(inout) :: this
-        print *, "This is the finalize subroutine in the amrist module."
+
+        ! Finalize AMRData variables
     end subroutine finalize 
 
-    subroutine get_dmomdt(this)
-        class(amrist), intent(inout) :: this
-        print *, "This is the get_dmomdt subroutine in the amrist module."
-    end subroutine get_dmomdt 
+    ! ============================================================================
+    ! UTILITIES
+    ! ============================================================================
 
-    subroutine add_surface_tension_jump(this)
+    subroutine get_dQdt(this,dQdt,dt,time)
         class(amrist), intent(inout) :: this
-        print *, "This is the add_surface_tension_jump subroutine in the amrist module."
+        class(amrdata), intent(inout) :: dQdt                        ! Output: momentum RHS (cell-centered)
+        real(WP), intent(in) :: dt,time
+        call this%fsvf%get_dQdt(dQdt,dt,time)
+    end subroutine get_dQdt 
+
+    subroutine add_surface_tension_jump(this,scale)
+        class(amrist), intent(inout) :: this
+        real(WP), intent(in) :: scale
+        SELECT CASE (this%SurfaceTensionOption)
+            case (2)
+                call this%add_integral_surface_tension(scale)
+            case (3)
+                call this%add_csf_shift_integral_surface_tension_jump(scale)
+            CASE DEFAULT
+                call this%fsvf%add_surface_tension(scale)
+        END SELECT
     end subroutine add_surface_tension_jump 
 
-    subroutine add_integral_surface_tension_jump(this)
+    subroutine add_interface_to_PU_neighborhood(this,neighborhood,i,j,k,mfi,solver)
+        use f_PUNeigh_RectCub_class
+        use irl_fortran_interface
         class(amrist), intent(inout) :: this
-        print *, "This is the add_integral_surface_tension_jump subroutine in the amrist module."
-    end subroutine add_integral_surface_tension_jump 
+        integer :: i,j,k,lvl
+        type(PUNeigh_RectCub_type) :: neighborhood
+        type(PUST_RectCub_type), optional :: solver
+        real(WP) :: problo(3)
+        real(WP) :: dx,dy,dz
+        real(WP), dimension(1:3) :: cenInitial,projectedNormal,cen,planeNormal
+        real(WP) :: weight_vf, weight_normal, alignment 
+        type(amrex_mfiter) :: mfi 
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+        type(pic_container), dimension(:,:,:,:), contiguous, pointer :: pPIC
+        type(pic_container) :: interface_component 
+        ! Solver Check 
+        dx = this%fsvf%amr%dx(lvl)
+        dy = this%fsvf%amr%dy(lvl)
+        dz = this%fsvf%amr%dz(lvl)
+        lvl    = this%fsvf%amr%maxlvl 
+        if(present(solver)) then 
+            ! Compute Centroid of cell
+            cenInitial = this%fsvf%amr%geom(lvl)%get_physical_location([i,j,k])
+            cenInitial = cenInitial + (/dx/2.0_WP,dy/2.0_WP,dz/2.0_WP/)
 
-    subroutine add_csf_shift_integral_surface_tension_jump(this)
+            ! Get PU Normal
+            call getNormalPU(solver,cenInitial(1),cenInitial(2),cenInitial(3),this%PU_spread*this%fsvf%amr%dx(lvl),projectedNormal)
+        endif
+        ! Get VF and PIC Containers as arrays
+        pVF => this%fsvf%VF%mf(lvl)%dataptr(mfi)
+        pPIC => this%fsvf%PIC%dataptr(mfi)
+
+        if(pVF(i,j,k,1) .gt. VFlo .and. pVF(i,j,k,1) .lt. VFhi) then ! Mixed Cell 
+            ! First, get plane into
+            ! ######################### REPLACE THIS HERE
+            cen = calculateCentroid(pPIC(i,j,k,1))
+            interface_component = pPIC(i,j,k,1)
+
+            ! Compute VF Weight
+            weight_vf = 1.0_WP 
+            if(pVF(i,j,k,1) .lt. 0.1) then 
+                weight_vf = 0.5_WP - 0.5_WP * COS(10.0_WP*Pi*pVF(i,j,k,1))
+            endif 
+
+            if(pVF(i,j,k,1) .gt. 0.9) then 
+                weight_vf = 0.5_WP - 0.5_WP * COS(10.0_WP*Pi*(1.0_WP-pVF(i,j,k,1)))
+            endif 
+
+            ! Compute Normal Weight
+            weight_normal = 1.0_WP
+            if(present(solver)) then 
+                ! ######################### REPLACE THIS HERE
+                planeNormal = calculateNormal(interface_component)
+                alignment = sum(projectedNormal*planeNormal)
+                weight_normal = max(alignment,0.0_WP)
+            endif
+
+            ! Add Member 
+            ! ######################### REPLACE THIS HERE
+            call addMember(neighborhood,cen,weight_vf*weight_normal,interface_component,0.0_WP)
+        endif
+    end subroutine add_interface_to_PU_neighborhood 
+
+    ! ============================================================================
+    ! PHYSICS METHODS
+    ! ============================================================================
+
+    subroutine add_integral_surface_tension(this,scale)
+        use amrex_amr_module, only: amrex_multifab
+        use amrex_interface, only: amrmfab_average_down_face
+        implicit none
         class(amrist), intent(inout) :: this
+        real(WP), intent(in) :: scale 
+
+        type(amrex_multifab),dimension(:), allocatable :: STFx,STFy,STFz
+        type(amrex_mfiter) :: mfi 
+        type(amrex_box) :: bx
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        real(WP) :: dxi,dyi,dzi,VF_f,mysurf,mycurv
+        integer :: lvl,i,j,k
+
+        ! Guard: no surface tension or clvl<maxlvl
+        if (this%fsvf%sigma.eq.0.0_WP.or.this%fsvf%amr%clvl().lt.this%fsvf%amr%maxlvl) return
+        ! Build temp face flux mfabs
+        allocate(STFx(0:this%fsvf%amr%clvl()),STFy(0:this%fsvf%amr%clvl()),STFz(0:this%fsvf%amr%clvl()))
+        do lvl=0,this%fsvf%amr%clvl()
+            call this%fsvf%amr%mfab_build(lvl,STFx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.]); call STFx(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.]); call STFy(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ]); call STFz(lvl)%setval(0.0_WP)
+        end do
+
+        ! Here we make the forces (The Hard Part)
+        call this%update_tension_forces_forces(STFx,STFy,STFz)
+
+        ! Average down face fluxes from finest to coarser levels
+        do lvl=this%fsvf%amr%clvl()-1,0,-1
+            call amrmfab_average_down_face(fmf=STFx(lvl+1),cmf=STFx(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+            call amrmfab_average_down_face(fmf=STFy(lvl+1),cmf=STFy(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+            call amrmfab_average_down_face(fmf=STFz(lvl+1),cmf=STFz(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+        end do
+        ! Apply fluxes
+        call this%fsvf%apply_face_fluxes(scale,STFx,STFy,STFz)
+        ! Destroy temps
+        do lvl=0,this%fsvf%amr%clvl()
+            call this%fsvf%amr%mfab_destroy(STFx(lvl))
+            call this%fsvf%amr%mfab_destroy(STFy(lvl))
+            call this%fsvf%amr%mfab_destroy(STFz(lvl))
+        end do
+        deallocate(STFx,STFy,STFz)
+
+    end subroutine add_integral_surface_tension
+
+    subroutine add_csf_shift_integral_surface_tension_jump(this,scale)
+        use amrex_amr_module, only: amrex_multifab
+        use amrex_interface, only: amrmfab_average_down_face
+        implicit none 
+        class(amrist), intent(inout) :: this
+        type(amrex_multifab),dimension(:), allocatable :: STFx,STFy,STFz
+        real(WP) :: scale
         print *, "This is the add_csf_shift_integral_surface_tension_jump subroutine in the amrist module."
     end subroutine add_csf_shift_integral_surface_tension_jump 
 
+
+
+
     subroutine update_surface_tension_stresses(this)
+        use irl_fortran_interface
+        use f_PUNeigh_RectCub_class
         class(amrist), intent(inout) :: this
+        type(PUST_RectCub_type) :: solver
+        real(WP) :: dx,dy,dz
+        integer :: lvl,i,j,k 
+        integer :: i_in,j_in, k_in 
+        integer :: shift_first_index,shift_second_index
+        real(WP), dimension(1:3) :: dvec,shift
+        real(WP), dimension(1:3) :: pressure_cell_center,velocity_cell_center,face_center 
+        real(WP), dimension(1:3) :: force
+        real(WP), dimension(1:3) :: P0,P1,P2,P3 
+        type(PUNeigh_RectCub_type) :: neighborhood,neighborhood_trimmed
+        type(amrex_box) :: bx
+        type(amrex_mfiter) :: mfi
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+
+        lvl = this%fsvf%amr%maxlvl 
+        dx = this%fsvf%amr%dx(lvl)
+        dy = this%fsvf%amr%dy(lvl)
+        dz = this%fsvf%amr%dz(lvl)
+        dvec = (/dx,dy,dz/)
+        ! Create Neighborhood and Solver
+        call new(neighborhood) 
+        call new(neighborhood_trimmed) 
+        call new(solver)
+
+        ! Iterate Over Domain at Finest lvl 
+        call this%fsvf%amr%mfiter_build(lvl,mfi)
+        do while (mfi%next())
+
+            pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
+
+            bx = mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+
+                ! Here we make the Neighborhood 
+                call emptyNeighborhood(neighborhood)
+                do i_in = -3,3; do j_in = -3,3; do k_in = -3,3 
+                    call this%add_interface_to_PU_neighborhood(neighborhood,i+i_in, j+j_in, k+k_in,mfi)
+                end do; end do; end do;
+
+                call setNeighborhood(solver,neighborhood)
+                call setKernelSize(solver, this%PU_spread*dx) 
+
+                ! Remake Neighborhood with normal weights
+                call emptyNeighborhood(neighborhood)
+                do i_in = -3,3; do j_in = -3,3; do k_in = -3,3 
+                    call this%add_interface_to_PU_neighborhood(neighborhood,i+i_in, j+j_in, k+k_in,mfi,solver)
+                end do; end do; end do;
+                call setNeighborhood(solver,neighborhood)
+                call setKernelSize(solver, this%PU_spread*dx) 
+
+                ! Get Stresses 
+                ! ######################### REPLACE THIS HERE
+                pressure_cell_center = this%fsvf%amr%geom(lvl)%get_physical_location([i,j,k])
+                pressure_cell_center = pressure_cell_center + dvec/2
+                do i_in = 1,3 
+                    ! Set up shift to velocity cell
+                    shift = (/0.0_WP,0.0_WP,0.0_WP/)  
+                    shift(i_in) = dvec(i_in)/2
+                    ! Move center to velocity cell we are looking at
+                    velocity_cell_center = pressure_cell_center - shift
+                    do j_in = 1,3 
+                        force = (/0.0_WP,0.0_WP,0.0_WP/)
+                        ! Shift from velocity cell center ot the face center we are looking at:
+                        shift = (/0.0_WP,0.0_WP,0.0_WP/)  
+                        shift(j_in) = dvec(j_in)/2
+                        face_center = velocity_cell_center + shift
+                        ! Now that we have the face center and normal direction (all positive normals)
+                        ! we can use the pattern below to get a CCW orientation:
+                        ! -- =>  +- => ++ => -+
+                        ! The directions we apply this two are the directions perpendicular to our normal, in CCW order. This is to say if our directional order is:
+                        ! (x,y,z) then we use  (y,z) for x normal, (z,x) for y normal, and (x,y) for z normal
+                        ! This is where we define those directions, in indices
+                        shift_first_index = mod(j_in,3)+1
+                        shift_second_index = mod(j_in+1,3)+1
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = -shift(shift_first_index)
+                        shift(shift_second_index) = -shift(shift_second_index)
+                        P0 = face_center + shift
+
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = shift(shift_first_index)
+                        shift(shift_second_index) = -shift(shift_second_index)
+                        P1 = face_center + shift
+
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = shift(shift_first_index)
+                        shift(shift_second_index) = shift(shift_second_index)
+                        P2 = face_center + shift
+
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = -shift(shift_first_index)
+                        shift(shift_second_index) = shift(shift_second_index)
+                        P3 = face_center + shift
+
+                        ! Now that we have the face corners, run the code and get the force
+                        ! if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+                        call solveFace(solver,this%fsvf%sigma,P0,P1,P2,P3,this%PU_spread*dx,this%PressureOption,this%MarangoniOption,force)
+                        
+                        ! Now that we have the force, store it properly 
+                        if(i_in .eq. 1) then 
+                            pSigma_x(i,j,k,j_in) = force(i_in) 
+                        elseif(i_in .eq. 2) then 
+                            pSigma_y(i,j,k,j_in) = force(i_in) 
+                        elseif (i_in .eq. 3) then 
+                            pSigma_z(i,j,k,j_in) = force(i_in) 
+                        endif 
+
+                        
+                        ! print *, "==================================="
+                        ! print *, "i_in,j_in: ",i_in,j_in
+                        ! print *, "pressure_cell_center: ", pressure_cell_center
+                        ! print *, "velocity_cell_center: ", velocity_cell_center
+                        ! print *, "face_center: ", face_center 
+                        ! print *, "shift_first_index: ", shift_first_index 
+                        ! print *, "shift_second_index: ", shift_second_index 
+                        ! print *, "P0: ", P0
+                        ! print *, "P1: ", P1
+                        ! print *, "P2: ", P2
+                        ! print *, "P3: ", P3
+                        ! write(*,'(A)', advance='no') "For Desmos: [("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='no') P0(shift_first_index), ",", P0(shift_second_index), "),("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='no') P1(shift_first_index), ",", P1(shift_second_index), "),("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='no') P2(shift_first_index), ",", P2(shift_second_index), "),("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='yes') P3(shift_first_index), ",", P3(shift_second_index), ")]"
+                        ! print *, "==================================="
+                    enddo
+                enddo
+            end do; end do; end do
+        enddo 
         print *, "This is the update_surface_tension_stresses subroutine in the amrist module."
     end subroutine update_surface_tension_stresses 
     
-    subroutine update_tension_forces_forces(this)
+
+
+
+
+    subroutine update_tension_forces_forces(this,STFx,STFy,STFz)
+        use amrex_amr_module, only: amrex_multifab
+        use amrex_interface, only: amrmfab_average_down_face
+        implicit none 
         class(amrist), intent(inout) :: this
-        print *, "This is the update_tension_forces_forces subroutine in the amrist module."
+        type(amrex_multifab),dimension(:), allocatable, intent(inout) :: STFx,STFy,STFz
+        type(amrex_box) :: bx
+        type(amrex_mfiter) :: mfi
+        integer :: lvl,i,j,k
+        real(WP) :: dxi,dyi,dzi
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz
+
+        call this%update_surface_tension_stresses()
+        
+        lvl = this%fsvf%amr%maxlvl 
+        dxi=1.0_WP/this%fsvf%amr%dx(lvl); dyi=1.0_WP/this%fsvf%amr%dy(lvl); dzi=1.0_WP/this%fsvf%amr%dz(lvl)
+        call this%fsvf%amr%mfiter_build(lvl,mfi)
+        do while (mfi%next())
+            pSTFx =>STFx(lvl)%dataptr(mfi)
+            pSTFy =>STFy(lvl)%dataptr(mfi)
+            pSTFz =>STFz(lvl)%dataptr(mfi)
+
+            pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
+
+            ! stresses are stored at cell centers
+            ! X Faces
+            bx=mfi%nodaltilebox(1) 
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dyi*dzi + &
+                                (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dzi
+                if(.not. this%TwoD) then 
+                    pSTFx(i,j,k,1) = pSTFx(i,j,k,1) + &
+                                (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi
+                endif
+            end do; end do; end do
+
+            ! Y Faces
+            bx=mfi%nodaltilebox(2) 
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                pSTFy(i,j,k,1)= (pSigma_y(i,j,k,1)-pSigma_y(i-1,j,k,1)) * dyi*dzi + &
+                                (pSigma_y(i,j,k,2)-pSigma_y(i,j-1,k,2)) * dxi*dzi
+                if(.not. this%TwoD) then 
+                    pSTFy(i,j,k,1) = pSTFy(i,j,k,1) + &
+                                (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi
+                endif
+            end do; end do; end do
+
+            ! Z Faces
+            bx=mfi%nodaltilebox(3) 
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dyi*dzi + &
+                                (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dzi
+                if(.not. this%TwoD) then 
+                    pSTFz(i,j,k,1) = pSTFz(i,j,k,1) + &
+                                (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi
+                endif
+            end do; end do; end do
+        enddo 
+        call this%fsvf%amr%mfiter_destroy(mfi)         
     end subroutine update_tension_forces_forces 
 
+
+    ! ============================================================================
+    ! ELLIPSOID METHODS
+    ! ============================================================================
     subroutine update_surface_tension_stresses_ellipsoid(this)
         class(amrist), intent(inout) :: this
         print *, "This is the update_surface_tension_stresses_ellipsoid subroutine in the amrist module."
@@ -113,9 +493,6 @@ contains
         print *, "This is the update_tension_forces_forces_ellipsoid subroutine in the amrist module."
     end subroutine update_tension_forces_forces_ellipsoid 
 
-    subroutine add_interface_to_PU_neighborhood(this)
-        class(amrist), intent(inout) :: this
-        print *, "This is the add_interface_to_PU_neighborhood subroutine in the amrist module."
-    end subroutine add_interface_to_PU_neighborhood 
+    
 
 end module amrist_class
