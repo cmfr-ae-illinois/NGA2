@@ -152,14 +152,23 @@ contains
         real(WP), dimension(1:3) :: cenInitial,projectedNormal,cen,planeNormal
         real(WP) :: weight_vf, weight_normal, alignment 
         type(amrex_mfiter) :: mfi 
-        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pPLIC
         type(pic_container), dimension(:,:,:,:), contiguous, pointer :: pPIC
         type(pic_container) :: interface_component 
+        type(RectCub_type) :: cell
+        type(PlanarSep_type) :: planar_sep
+        type(Poly_type) :: polygon
+        real(WP), dimension(3) :: lo,hi
         ! Solver Check 
         dx = this%fsvf%amr%dx(lvl)
         dy = this%fsvf%amr%dy(lvl)
         dz = this%fsvf%amr%dz(lvl)
         lvl    = this%fsvf%amr%maxlvl 
+
+        call new(cell)
+        call new(polygon)
+        call new(planar_sep)
+
         if(present(solver)) then 
             ! Compute Centroid of cell
             cenInitial = this%fsvf%amr%geom(lvl)%get_physical_location([i,j,k])
@@ -171,12 +180,26 @@ contains
         ! Get VF and PIC Containers as arrays
         pVF => this%fsvf%VF%mf(lvl)%dataptr(mfi)
         pPIC => this%fsvf%PIC%dataptr(mfi)
-
+        pPLIC=>this%fsvf%PLIC%dataptr(mfi)
         if(pVF(i,j,k,1) .gt. VFlo .and. pVF(i,j,k,1) .lt. VFhi) then ! Mixed Cell 
             ! First, get plane into
             ! ######################### REPLACE THIS HERE
-            cen = calculateCentroid(pPIC(i,j,k,1))
             interface_component = pPIC(i,j,k,1)
+            call setNumerOfPlanes(planar_sep,1)
+            call setPlane(planar_sep,0,pPLIC(i,j,k,1:3),pPLIC(i,j,k,4))
+            lo=[this%fsvf%amr%xlo+real(i  ,WP)*dx,this%fsvf%amr%ylo+real(j  ,WP)*dy,this%fsvf%amr%zlo+real(k  ,WP)*dz]
+            hi=[this%fsvf%amr%xlo+real(i+1,WP)*dx,this%fsvf%amr%ylo+real(j+1,WP)*dy,this%fsvf%amr%zlo+real(k+1,WP)*dz]
+            call construct_2pt(cell,lo,hi)
+            call getPoly(cell,planar_sep,0,polygon)
+
+            if (getNumberOfVertices(polygon).ge.3) then
+                 cen = calculateCentroid(polygon)
+            else 
+                print *,"WARNING: DEGENERATE POLYGON IN PU NEIGHBORHOOD"
+            endif
+
+           
+            
 
             ! Compute VF Weight
             weight_vf = 1.0_WP 
@@ -191,8 +214,11 @@ contains
             ! Compute Normal Weight
             weight_normal = 1.0_WP
             if(present(solver)) then 
-                ! ######################### REPLACE THIS HERE
-                planeNormal = calculateNormal(interface_component)
+                if (getNumberOfVertices(polygon).ge.3) then
+                    planeNormal = calculateNormal(polygon)
+                else 
+                    print *,"WARNING: DEGENERATE POLYGON IN PU NEIGHBORHOOD"
+                endif
                 alignment = sum(projectedNormal*planeNormal)
                 weight_normal = max(alignment,0.0_WP)
             endif
