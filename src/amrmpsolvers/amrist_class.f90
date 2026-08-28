@@ -39,6 +39,7 @@ module amrist_class
         ! Face dependence is indexed on each stress.
         type(amrdata) :: ST_x_stresses,ST_y_stresses,ST_z_stresses
         type(amrdata) :: ST_x_force,ST_y_force,ST_z_force
+        type(amrdata) :: CSF_x_force,CSF_y_force,CSF_z_force
         ! Flag to skip registration with amrgrid in case of inheritance
         logical :: skip_registration=.false.
     contains 
@@ -122,6 +123,10 @@ contains
         call this%ST_x_force%initialize(this%fsvf%amr,name='ST_x_Force',ncomp=1,ng=this%fsvf%nover)
         call this%ST_y_force%initialize(this%fsvf%amr,name='ST_y_Force',ncomp=1,ng=this%fsvf%nover)
         call this%ST_z_force%initialize(this%fsvf%amr,name='ST_z_Force',ncomp=1,ng=this%fsvf%nover)
+
+        call this%CSF_x_force%initialize(this%fsvf%amr,name='CSF_x_Force',ncomp=1,ng=this%fsvf%nover)
+        call this%CSF_y_force%initialize(this%fsvf%amr,name='CSF_y_Force',ncomp=1,ng=this%fsvf%nover)
+        call this%CSF_z_force%initialize(this%fsvf%amr,name='CSF_z_Force',ncomp=1,ng=this%fsvf%nover)
         print *, "ST_x initialized TEST TEST TEST"
 
         if(.not. this%skip_registration) then 
@@ -172,9 +177,13 @@ contains
         call this%ST_y_stresses%reset_level(lvl,ba,dm); call this%St_y_stresses%setval(val=0.0_WP,lvl=lvl)
         call this%ST_z_stresses%reset_level(lvl,ba,dm); call this%St_z_stresses%setval(val=0.0_WP,lvl=lvl)
 
-        call this%ST_x_force%reset_level(lvl,ba,dm); call this%St_x_force%setval(val=0.0_WP,lvl=lvl)
-        call this%ST_y_force%reset_level(lvl,ba,dm); call this%St_y_force%setval(val=0.0_WP,lvl=lvl)
-        call this%ST_z_force%reset_level(lvl,ba,dm); call this%St_z_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_x_force%reset_level(lvl,ba,dm); call this%ST_x_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_y_force%reset_level(lvl,ba,dm); call this%ST_y_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_z_force%reset_level(lvl,ba,dm); call this%ST_z_force%setval(val=0.0_WP,lvl=lvl)
+
+        call this%CSF_x_force%reset_level(lvl,ba,dm); call this%CSF_x_force%setval(val=0.0_WP,lvl=lvl)
+        call this%CSF_y_force%reset_level(lvl,ba,dm); call this%CSF_y_force%setval(val=0.0_WP,lvl=lvl)
+        call this%CSF_z_force%reset_level(lvl,ba,dm); call this%CSF_z_force%setval(val=0.0_WP,lvl=lvl)
     end subroutine on_init
 
     !> Dispatch on_coarse: calls type-bound method
@@ -203,9 +212,13 @@ contains
         call this%ST_y_stresses%reset_level(lvl,ba,dm); call this%St_y_stresses%setval(val=0.0_WP,lvl=lvl)
         call this%ST_z_stresses%reset_level(lvl,ba,dm); call this%St_z_stresses%setval(val=0.0_WP,lvl=lvl)
 
-        call this%ST_x_force%reset_level(lvl,ba,dm); call this%St_x_force%setval(val=0.0_WP,lvl=lvl)
-        call this%ST_y_force%reset_level(lvl,ba,dm); call this%St_y_force%setval(val=0.0_WP,lvl=lvl)
-        call this%ST_z_force%reset_level(lvl,ba,dm); call this%St_z_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_x_force%reset_level(lvl,ba,dm); call this%ST_x_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_y_force%reset_level(lvl,ba,dm); call this%ST_y_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_z_force%reset_level(lvl,ba,dm); call this%ST_z_force%setval(val=0.0_WP,lvl=lvl)
+
+        call this%CSF_x_force%reset_level(lvl,ba,dm); call this%CSF_x_force%setval(val=0.0_WP,lvl=lvl)
+        call this%CSF_y_force%reset_level(lvl,ba,dm); call this%CSF_y_force%setval(val=0.0_WP,lvl=lvl)
+        call this%CSF_z_force%reset_level(lvl,ba,dm); call this%CSF_z_force%setval(val=0.0_WP,lvl=lvl)
     end subroutine on_coarse
     !> Dispatch on_remake: calls type-bound method
     subroutine amrist_on_remake(ctx,lvl,time,ba,dm)
@@ -233,9 +246,13 @@ contains
         call this%ST_y_stresses%reset_level(lvl,ba,dm); call this%St_y_stresses%setval(val=0.0_WP,lvl=lvl)
         call this%ST_z_stresses%reset_level(lvl,ba,dm); call this%St_z_stresses%setval(val=0.0_WP,lvl=lvl)
 
-        call this%ST_x_force%reset_level(lvl,ba,dm); call this%St_x_force%setval(val=0.0_WP,lvl=lvl)
-        call this%ST_y_force%reset_level(lvl,ba,dm); call this%St_y_force%setval(val=0.0_WP,lvl=lvl)
-        call this%ST_z_force%reset_level(lvl,ba,dm); call this%St_z_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_x_force%reset_level(lvl,ba,dm); call this%ST_x_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_y_force%reset_level(lvl,ba,dm); call this%ST_y_force%setval(val=0.0_WP,lvl=lvl)
+        call this%ST_z_force%reset_level(lvl,ba,dm); call this%ST_z_force%setval(val=0.0_WP,lvl=lvl)
+
+        call this%CSF_x_force%reset_level(lvl,ba,dm); call this%CSF_x_force%setval(val=0.0_WP,lvl=lvl)
+        call this%CSF_y_force%reset_level(lvl,ba,dm); call this%CSF_y_force%setval(val=0.0_WP,lvl=lvl)
+        call this%CSF_z_force%reset_level(lvl,ba,dm); call this%CSF_z_force%setval(val=0.0_WP,lvl=lvl)
     end subroutine on_remake
     !> Dispatch on_clear: calls type-bound method
     subroutine amrist_on_clear(ctx,lvl)
@@ -260,6 +277,10 @@ contains
         call this%ST_x_force%clear_level(lvl)
         call this%ST_y_force%clear_level(lvl)
         call this%ST_z_force%clear_level(lvl)
+
+        call this%CSF_x_force%clear_level(lvl)
+        call this%CSF_y_force%clear_level(lvl)
+        call this%CSF_z_force%clear_level(lvl)
 
     end subroutine on_clear
 
@@ -637,11 +658,15 @@ contains
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx_viz,pSTFy_viz,pSTFz_viz
 
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx_viz_CSF,pSTFy_viz_CSF,pSTFz_viz_CSF
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pSubVF,pCurv,pSD
+        real(WP) :: VF_f,mysurf,mycurv
         ! print *, "START update_surface_tension_forces"
         call this%update_surface_tension_stresses()
-        
+        ! Here we are going to compute the CSF Force for comparision
         lvl = this%fsvf%amr%maxlvl 
         dxi=1.0_WP/this%fsvf%amr%dx(lvl); dyi=1.0_WP/this%fsvf%amr%dy(lvl); dzi=1.0_WP/this%fsvf%amr%dz(lvl)
+        ! print *, "DXI = ", dxi,dyi,dzi
         call this%fsvf%amr%mfiter_build(lvl,mfi)
         do while (mfi%next())
             pSTFx =>STFx(lvl)%dataptr(mfi)
@@ -652,23 +677,36 @@ contains
             pSTFy_viz =>this%ST_y_force%mf(lvl)%dataptr(mfi)
             pSTFz_viz =>this%ST_z_force%mf(lvl)%dataptr(mfi)
 
+            pSTFx_viz_CSF =>this%CSF_x_force%mf(lvl)%dataptr(mfi)
+            pSTFy_viz_CSF =>this%CSF_y_force%mf(lvl)%dataptr(mfi)
+            pSTFz_viz_CSF =>this%CSF_z_force%mf(lvl)%dataptr(mfi)
+
             pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
             pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
             pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
 
+            pVF   =>this%fsvf%VF%mf(lvl)%dataptr(mfi)
+            pSubVF=>this%fsvf%subVF%dataptr(mfi)
+            pCurv =>this%fsvf%curv%dataptr(mfi)
+            pSD   =>this%fsvf%SD%dataptr(mfi)
             ! stresses are stored at cell centers
             ! X Faces
             bx=mfi%nodaltilebox(1) 
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dyi*dzi + &
+                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dyi*dzi+ &
                                 (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dzi
                 if(.not. this%TwoD) then 
                     pSTFx(i,j,k,1) = pSTFx(i,j,k,1) + &
                                 (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi
                 endif
+                pSTFx(i,j,k,1) = pSTFx(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
                 pSTFx_viz(i,j,k,1) = pSTFx(i,j,k,1)
 
-
+                ! CSF
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i-1:i,j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i-1:i,j,k,1)*pCurv(i-1:i,j,k,1))/mysurf
+                VF_f=0.5_WP*(pSubVF(i-1,j,k,2)+pSubVF(i,j,k,1))
+                pSTFx_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i-1,j,k,1))*dxi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
             end do; end do; end do
 
             ! Y Faces
@@ -680,21 +718,32 @@ contains
                     pSTFy(i,j,k,1) = pSTFy(i,j,k,1) + &
                                 (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi
                 endif
-
+                pSTFy(i,j,k,1) = pSTFy(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
                 pSTFy_viz(i,j,k,1) = pSTFy(i,j,k,1)
+
+                ! CSF
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i,j-1:j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j-1:j,k,1)*pCurv(i,j-1:j,k,1))/mysurf
+                VF_f=0.5_WP*(pSubVF(i,j-1,k,4)+pSubVF(i,j,k,3))
+                pSTFy_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j-1,k,1))*dyi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
             end do; end do; end do
 
             ! Z Faces
             bx=mfi%nodaltilebox(3) 
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dyi*dzi + &
-                                (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dzi
+                pSTFz(i,j,k,1)= 0.0_WP
                 if(.not. this%TwoD) then 
-                    pSTFz(i,j,k,1) = pSTFz(i,j,k,1) + &
-                                (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi
+                    pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dyi*dzi + &
+                                    (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dzi + &
+                                    (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi
                 endif
-
+                pSTFz(i,j,k,1) = pSTFz(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
                 pSTFz_viz(i,j,k,1) = pSTFz(i,j,k,1)
+
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i,j,k-1:k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j,k-1:k,1)*pCurv(i,j,k-1:k,1))/mysurf
+                VF_f=0.5_WP*(pSubVF(i,j,k-1,6)+pSubVF(i,j,k,5))
+                pSTFz_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j,k-1,1))*dzi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
             end do; end do; end do
         enddo 
         call this%fsvf%amr%mfiter_destroy(mfi)  
