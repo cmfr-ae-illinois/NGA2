@@ -64,18 +64,24 @@ module amrist_class
 
         ! Surface Tension Functions
         procedure, private :: add_integral_surface_tension ! Done
+        procedure, private :: add_integral_surface_tension_pressure
         procedure, private :: add_csf_shift_integral_surface_tension_jump 
 
         ! Integral Surface Tension Methods
         procedure, private :: update_surface_tension_stresses !Done 
         procedure, private :: update_surface_tension_forces ! Done
 
+        ! Pressure Cell Formulation 
+        procedure, private :: update_surface_tension_stresses_pressure 
+        procedure, private :: update_surface_tension_forces_pressure 
+        procedure, private :: apply_surface_tension
+        ! procedure, private :: apply_pressure_fluxes
         ! Ellipsoid Exact Values
         procedure, private :: update_surface_tension_stresses_ellipsoid
         procedure, private :: update_surface_tension_forces_ellipsoid
 
         ! Smoothing Functions
-
+        procedure, private :: apply_laplacian_smoothing
         ! Helpers 
         procedure, private :: add_interface_to_PU_neighborhood ! Done
     end type amrist 
@@ -98,7 +104,7 @@ contains
         integer :: lvl
         ! IRL REQUIRED
 #ifdef USE_IRL
-            print *, "Creating IST"
+            ! print *, "Creating IST"
 #else
             print *, "ERROR: amrist require IRL usage"
             STOP 
@@ -115,7 +121,7 @@ contains
             print *, "WARNING: amrinc object has less than 3 ghost layers. 3 required for AMRIST initializiation"
         endif
         ! Initialize AMRData Variables
-        print *, "INITIALIZING STRESSES"
+        ! print *, "INITIALIZING STRESSES"
         call this%ST_x_stresses%initialize(this%fsvf%amr,name='ST_x_Stresses',ncomp=3,ng=this%fsvf%nover)
         call this%ST_y_stresses%initialize(this%fsvf%amr,name='ST_y_Stresses',ncomp=3,ng=this%fsvf%nover)
         call this%ST_z_stresses%initialize(this%fsvf%amr,name='ST_z_Stresses',ncomp=3,ng=this%fsvf%nover)
@@ -127,7 +133,7 @@ contains
         call this%CSF_x_force%initialize(this%fsvf%amr,name='CSF_x_Force',ncomp=1,ng=this%fsvf%nover)
         call this%CSF_y_force%initialize(this%fsvf%amr,name='CSF_y_Force',ncomp=1,ng=this%fsvf%nover)
         call this%CSF_z_force%initialize(this%fsvf%amr,name='CSF_z_Force',ncomp=1,ng=this%fsvf%nover)
-        print *, "ST_x initialized TEST TEST TEST"
+        ! print *, "ST_x initialized TEST TEST TEST"
 
         if(.not. this%skip_registration) then 
             select type(this) 
@@ -305,6 +311,8 @@ contains
                 call this%add_integral_surface_tension(scale)
             case (3)
                 call this%add_csf_shift_integral_surface_tension_jump(scale)
+            case (4)
+                call this%add_integral_surface_tension_pressure(scale)
             CASE DEFAULT
                 call this%fsvf%add_surface_tension(scale)
         END SELECT
@@ -453,14 +461,25 @@ contains
         ! Build temp face flux mfabs
         allocate(STFx(0:this%fsvf%amr%clvl()),STFy(0:this%fsvf%amr%clvl()),STFz(0:this%fsvf%amr%clvl()))
         do lvl=0,this%fsvf%amr%clvl()
-            call this%fsvf%amr%mfab_build(lvl,STFx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.]); call STFx(lvl)%setval(0.0_WP)
-            call this%fsvf%amr%mfab_build(lvl,STFy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.]); call STFy(lvl)%setval(0.0_WP)
-            call this%fsvf%amr%mfab_build(lvl,STFz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ]); call STFz(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFx(lvl),ncomp=1,nover=1,atface=[.true., .false.,.false.]); call STFx(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFy(lvl),ncomp=1,nover=1,atface=[.false.,.true., .false.]); call STFy(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFz(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.true. ]); call STFz(lvl)%setval(0.0_WP)
         end do
 
-        ! Here we make the forces (The Hard Part)
+        ! Here we make the forces
         call this%update_surface_tension_forces(STFx,STFy,STFz)
         
+        ! Smoothing
+        ! select case (this%SmoothingOption)
+        !     case (1)
+        !         ! No smoothing
+        !     case (2)
+        !         ! print *, "Laplacian Smoothing"
+        !         call this%apply_laplacian_smoothing(STFx,STFy,STFz)
+        !     case default
+        !         ! No smoothing
+        ! end select
+
         ! Average down face fluxes from finest to coarser levels
         do lvl=this%fsvf%amr%clvl()-1,0,-1
             call amrmfab_average_down_face(fmf=STFx(lvl+1),cmf=STFx(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
@@ -479,6 +498,91 @@ contains
         ! print *, "END add_integral_surface_tension"
     end subroutine add_integral_surface_tension
 
+    subroutine add_integral_surface_tension_pressure(this,scale)
+        use amrex_amr_module, only: amrex_multifab
+        use amrex_interface, only: amrmfab_average_down_cell
+        implicit none
+        class(amrist), intent(inout) :: this
+        real(WP), intent(in) :: scale 
+
+        type(amrex_multifab),dimension(:), allocatable :: STFx,STFy,STFz
+        type(amrex_mfiter) :: mfi 
+        type(amrex_box) :: bx
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        real(WP) :: dxi,dyi,dzi,VF_f,mysurf,mycurv
+        integer :: lvl,i,j,k
+        
+        ! print *, "START add_integral_surface_tension"
+        ! Guard: no surface tension or clvl<maxlvl
+        if (this%fsvf%sigma.eq.0.0_WP.or.this%fsvf%amr%clvl().lt.this%fsvf%amr%maxlvl) return
+        ! Build temp face flux mfabs
+        allocate(STFx(0:this%fsvf%amr%clvl()),STFy(0:this%fsvf%amr%clvl()),STFz(0:this%fsvf%amr%clvl()))
+        do lvl=0,this%fsvf%amr%clvl()
+            call this%fsvf%amr%mfab_build(lvl,STFx(lvl),ncomp=1,nover=1); call STFx(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFy(lvl),ncomp=1,nover=1); call STFy(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFz(lvl),ncomp=1,nover=1); call STFz(lvl)%setval(0.0_WP)
+        end do
+
+        ! Here we make the forces
+        call this%update_surface_tension_forces_pressure(STFx,STFy,STFz)
+        ! Apply Smoothing
+        ! print *, "Smoothing Option Inside: ",this%SmoothingOption
+        select case (this%SmoothingOption)
+            case (1)
+                ! No smoothing
+            case (2)
+                ! print *, "Laplacian Smoothing"
+                call this%apply_laplacian_smoothing(STFx,STFy,STFz)
+            case default
+                ! No smoothing
+        end select
+
+        ! Average down face fluxes from finest to coarser levels
+        ! print *,"Average Down"
+        do lvl=this%fsvf%amr%clvl()-1,0,-1
+            call amrmfab_average_down_cell(fmf=STFx(lvl+1),cmf=STFx(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+            call amrmfab_average_down_cell(fmf=STFy(lvl+1),cmf=STFy(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+            call amrmfab_average_down_cell(fmf=STFz(lvl+1),cmf=STFz(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+        end do
+        ! Apply fluxes
+        ! print *, "Apply_Surface_Tension"
+        call this%apply_surface_tension(scale,STFx,STFy,STFz)
+        ! Destroy temps
+        ! print *, "Destroy"
+        do lvl=0,this%fsvf%amr%clvl()
+            call this%fsvf%amr%mfab_destroy(STFx(lvl))
+            call this%fsvf%amr%mfab_destroy(STFy(lvl))
+            call this%fsvf%amr%mfab_destroy(STFz(lvl))
+        end do
+        ! print *, "Deallocate"
+        deallocate(STFx,STFy,STFz)
+        ! print *, "END add_integral_surface_tension"
+    end subroutine add_integral_surface_tension_pressure
+
+   !> Apply pre-built cell-centered fluxes to Q
+   !> and reconstruct face velocities from the updated Q
+   subroutine apply_surface_tension(this,scale,Fx,Fy,Fz)
+    use amrex_amr_module, only: amrex_multifab
+    implicit none
+
+    class(amrist), intent(inout) :: this
+    real(WP), intent(in) :: scale
+    type(amrex_multifab), intent(in) :: Fx(0:),Fy(0:),Fz(0:)
+
+    integer :: lvl
+
+    do lvl=0,this%fsvf%amr%clvl()
+        ! Cell-centered velocity
+        call this%fsvf%Q%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
+        call this%fsvf%Q%mf(lvl)%saxpy(scale,Fy(lvl),1,2,1,0)
+        call this%fsvf%Q%mf(lvl)%saxpy(scale,Fz(lvl),1,3,1,0)
+    end do
+
+    ! Reconstruct face-centered velocities from Q
+    call this%fsvf%get_face_velocity()
+    ! Update Boundaries
+   end subroutine apply_surface_tension
+
     subroutine add_csf_shift_integral_surface_tension_jump(this,scale)
         use amrex_amr_module, only: amrex_multifab
         use amrex_interface, only: amrmfab_average_down_face
@@ -488,9 +592,6 @@ contains
         real(WP) :: scale
         print *, "This is the add_csf_shift_integral_surface_tension_jump subroutine in the amrist module."
     end subroutine add_csf_shift_integral_surface_tension_jump 
-
-
-
 
     subroutine update_surface_tension_stresses(this)
         use irl_fortran_interface
@@ -602,7 +703,8 @@ contains
 
                         ! Now that we have the face corners, run the code and get the force
                         ! if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
-                
+                        ! print *, "Marangoni Option:",this%MarangoniOption
+                        
                         call solveFace(solver,this%fsvf%sigma,P0,P1,P2,P3,this%PU_spread*dx,this%PressureOption,this%MarangoniOption,force)
                         
                         ! Now that we have the force, store it properly 
@@ -613,10 +715,7 @@ contains
                         elseif (i_in .eq. 3) then 
                             pSigma_z(i,j,k,j_in) = force(i_in) 
                         endif 
-                        ! if(sum(force**2).gt. 0.0_WP) then 
-                        !     print *,"FORCE: ",force
-                        ! endif
-                        
+
                         ! print *, "==================================="
                         ! print *, "i_in,j_in: ",i_in,j_in
                         ! print *, "pressure_cell_center: ", pressure_cell_center
@@ -640,6 +739,9 @@ contains
             end do; end do; end do
             ! print *,"OUT BOX LOOP"
         enddo 
+        call this%ST_x_stresses%sync_lvl(lvl)
+        call this%ST_y_stresses%sync_lvl(lvl)
+        call this%ST_z_stresses%sync_lvl(lvl)
         ! print *, "OUT MFI LOOP"
     end subroutine update_surface_tension_stresses 
     
@@ -653,7 +755,7 @@ contains
         type(amrex_box) :: bx
         type(amrex_mfiter) :: mfi
         integer :: lvl,i,j,k
-        real(WP) :: dxi,dyi,dzi
+        real(WP) :: dxi,dyi,dzi,x,y,z,dx,dy,dz
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx_viz,pSTFy_viz,pSTFz_viz
@@ -666,6 +768,9 @@ contains
         ! Here we are going to compute the CSF Force for comparision
         lvl = this%fsvf%amr%maxlvl 
         dxi=1.0_WP/this%fsvf%amr%dx(lvl); dyi=1.0_WP/this%fsvf%amr%dy(lvl); dzi=1.0_WP/this%fsvf%amr%dz(lvl)
+        dx = this%fsvf%amr%dx(lvl)
+        dy = this%fsvf%amr%dy(lvl)
+        dz = this%fsvf%amr%dz(lvl)
         ! print *, "DXI = ", dxi,dyi,dzi
         call this%fsvf%amr%mfiter_build(lvl,mfi)
         do while (mfi%next())
@@ -699,14 +804,15 @@ contains
                     pSTFx(i,j,k,1) = pSTFx(i,j,k,1) + &
                                 (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi
                 endif
+                VF_f=0.5_WP*(pSubVF(i-1,j,k,2)+pSubVF(i,j,k,1))
                 pSTFx(i,j,k,1) = pSTFx(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
                 pSTFx_viz(i,j,k,1) = pSTFx(i,j,k,1)
 
                 ! CSF
                 mycurv=0.0_WP
                 mysurf=sum(pSD(i-1:i,j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i-1:i,j,k,1)*pCurv(i-1:i,j,k,1))/mysurf
-                VF_f=0.5_WP*(pSubVF(i-1,j,k,2)+pSubVF(i,j,k,1))
                 pSTFx_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i-1,j,k,1))*dxi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+
             end do; end do; end do
 
             ! Y Faces
@@ -718,13 +824,13 @@ contains
                     pSTFy(i,j,k,1) = pSTFy(i,j,k,1) + &
                                 (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi
                 endif
+                VF_f=0.5_WP*(pSubVF(i,j-1,k,4)+pSubVF(i,j,k,3))
                 pSTFy(i,j,k,1) = pSTFy(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
                 pSTFy_viz(i,j,k,1) = pSTFy(i,j,k,1)
 
                 ! CSF
                 mycurv=0.0_WP
                 mysurf=sum(pSD(i,j-1:j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j-1:j,k,1)*pCurv(i,j-1:j,k,1))/mysurf
-                VF_f=0.5_WP*(pSubVF(i,j-1,k,4)+pSubVF(i,j,k,3))
                 pSTFy_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j-1,k,1))*dyi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
             end do; end do; end do
 
@@ -737,18 +843,258 @@ contains
                                     (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dzi + &
                                     (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi
                 endif
+                VF_f=0.5_WP*(pSubVF(i,j,k-1,6)+pSubVF(i,j,k,5))
                 pSTFz(i,j,k,1) = pSTFz(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
                 pSTFz_viz(i,j,k,1) = pSTFz(i,j,k,1)
 
                 mycurv=0.0_WP
                 mysurf=sum(pSD(i,j,k-1:k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j,k-1:k,1)*pCurv(i,j,k-1:k,1))/mysurf
-                VF_f=0.5_WP*(pSubVF(i,j,k-1,6)+pSubVF(i,j,k,5))
                 pSTFz_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j,k-1,1))*dzi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
             end do; end do; end do
         enddo 
+
+        ! Fill same-level ghost cells, including periodic boundaries
+        call STFx(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFy(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFz(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+
         call this%fsvf%amr%mfiter_destroy(mfi)  
         ! print *, "END update_surface_tension_forces"       
     end subroutine update_surface_tension_forces
+
+     subroutine update_surface_tension_stresses_pressure(this)
+        use irl_fortran_interface
+        use f_PUNeigh_RectCub_class
+        class(amrist), intent(inout) :: this
+        type(PUST_RectCub_type) :: solver
+        real(WP) :: dx,dy,dz
+        integer :: lvl,i,j,k 
+        integer :: i_in,j_in, k_in 
+        integer :: shift_first_index,shift_second_index
+        real(WP), dimension(1:3) :: dvec,shift
+        real(WP), dimension(1:3) :: pressure_cell_center,velocity_cell_center,face_center 
+        real(WP), dimension(1:3) :: force
+        real(WP), dimension(1:3) :: P0,P1,P2,P3 
+        type(PUNeigh_RectCub_type) :: neighborhood,neighborhood_trimmed
+        type(amrex_box) :: bx
+        type(amrex_mfiter) :: mfi
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+
+        ! print *, "START update_surface_tension_stresses"
+        lvl = this%fsvf%amr%maxlvl 
+        dx = this%fsvf%amr%dx(lvl)
+        dy = this%fsvf%amr%dy(lvl)
+        dz = this%fsvf%amr%dz(lvl)
+        dvec = (/dx,dy,dz/)
+        ! Create Neighborhood and Solver
+        call new(neighborhood) 
+        call new(neighborhood_trimmed) 
+        call new(solver)
+
+        ! Iterate Over Domain at Finest lvl 
+        call this%fsvf%amr%mfiter_build(lvl,mfi)
+        do while (mfi%next())
+            ! print *,"GETTING POINTERS"
+            pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
+            bx = mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+
+                ! Here we make the Neighborhood 
+                ! print *,"Neighborhood1"
+                call emptyNeighborhood(neighborhood)
+                do i_in = -3,3; do j_in = -3,3; do k_in = -3,3 
+                    call this%add_interface_to_PU_neighborhood(neighborhood,i+i_in, j+j_in, k+k_in,mfi)
+                end do; end do; end do;
+                ! print *,"DONE NEIGHBORHOOD"
+                call setNeighborhood(solver,neighborhood)
+                call setKernelSize(solver, this%PU_spread*dx) 
+
+                ! Remake Neighborhood with normal weights
+                ! call emptyNeighborhood(neighborhood)
+                ! do i_in = -3,3; do j_in = -3,3; do k_in = -3,3 
+                !     call this%add_interface_to_PU_neighborhood(neighborhood,i+i_in, j+j_in, k+k_in,mfi,solver)
+                ! end do; end do; end do;
+                ! call setNeighborhood(solver,neighborhood)
+                ! call setKernelSize(solver, this%PU_spread*dx) 
+
+                ! Get Stresses 
+                pressure_cell_center = (/this%fsvf%amr%xlo+real(i  ,WP)*dx,this%fsvf%amr%ylo+real(j  ,WP)*dy,this%fsvf%amr%zlo+real(k  ,WP)*dz/)
+                pressure_cell_center = pressure_cell_center + dvec/2
+                do j_in = 1,3 
+                    force = (/0.0_WP,0.0_WP,0.0_WP/)
+                    ! Shift from velocity cell center ot the face center we are looking at:
+                    shift = (/0.0_WP,0.0_WP,0.0_WP/)  
+                    shift(j_in) = dvec(j_in)/2
+                    face_center = pressure_cell_center + shift
+                    ! Now that we have the face center and normal direction (all positive normals)
+                    ! we can use the pattern below to get a CCW orientation:
+                    ! -- =>  +- => ++ => -+
+                    ! The directions we apply this two are the directions perpendicular to our normal, in CCW order. This is to say if our directional order is:
+                    ! (x,y,z) then we use  (y,z) for x normal, (z,x) for y normal, and (x,y) for z normal
+                    ! This is where we define those directions, in indices
+                    shift_first_index = mod(j_in,3)+1
+                    shift_second_index = mod(j_in+1,3)+1
+                    ! Apply to get first corner
+                    shift = dvec/2     
+                    shift(j_in) = 0.0_WP
+                    shift(shift_first_index) = -shift(shift_first_index)
+                    shift(shift_second_index) = -shift(shift_second_index)
+                    P0 = face_center + shift
+
+                    ! Apply to get first corner
+                    shift = dvec/2     
+                    shift(j_in) = 0.0_WP
+                    shift(shift_first_index) = shift(shift_first_index)
+                    shift(shift_second_index) = -shift(shift_second_index)
+                    P1 = face_center + shift
+
+                    ! Apply to get first corner
+                    shift = dvec/2     
+                    shift(j_in) = 0.0_WP
+                    shift(shift_first_index) = shift(shift_first_index)
+                    shift(shift_second_index) = shift(shift_second_index)
+                    P2 = face_center + shift
+
+                    ! Apply to get first corner
+                    shift = dvec/2     
+                    shift(j_in) = 0.0_WP
+                    shift(shift_first_index) = -shift(shift_first_index)
+                    shift(shift_second_index) = shift(shift_second_index)
+                    P3 = face_center + shift
+
+                    ! Now that we have the face corners, run the code and get the force
+                    ! if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+                    ! print *, "Marangoni Option:",this%MarangoniOption
+                    
+                    call solveFace(solver,this%fsvf%sigma,P0,P1,P2,P3,this%PU_spread*dx,this%PressureOption,this%MarangoniOption,force)
+                    
+                    ! Now that we have the force, store it properly 
+                    pSigma_x(i,j,k,j_in) = force(1)
+                    pSigma_y(i,j,k,j_in) = force(2)
+                    pSigma_z(i,j,k,j_in) = force(3)
+                enddo
+                ! print *, "OUT STRESS LOOP"
+            end do; end do; end do
+            ! print *,"OUT BOX LOOP"
+        enddo 
+        call this%ST_x_stresses%sync_lvl(lvl)
+        call this%ST_y_stresses%sync_lvl(lvl)
+        call this%ST_z_stresses%sync_lvl(lvl)
+        ! print *, "OUT MFI LOOP"
+    end subroutine update_surface_tension_stresses_pressure
+    
+
+    subroutine update_surface_tension_forces_pressure(this,STFx,STFy,STFz)
+        use amrex_amr_module, only: amrex_multifab
+        implicit none 
+        class(amrist), intent(inout) :: this
+        type(amrex_multifab),dimension(:), allocatable, intent(inout) :: STFx,STFy,STFz
+        type(amrex_box) :: bx
+        type(amrex_mfiter) :: mfi
+        integer :: lvl,i,j,k
+        real(WP) :: dxi,dyi,dzi,x,y,z,dx,dy,dz
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx_viz,pSTFy_viz,pSTFz_viz
+
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx_viz_CSF,pSTFy_viz_CSF,pSTFz_viz_CSF
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pSubVF,pCurv,pSD
+        real(WP) :: VF_f,mysurf,mycurv
+        ! print *, "START update_surface_tension_forces"
+        call this%update_surface_tension_stresses_pressure()
+        ! Here we are going to compute the CSF Force for comparision
+        lvl = this%fsvf%amr%maxlvl 
+        dxi=1.0_WP/this%fsvf%amr%dx(lvl); dyi=1.0_WP/this%fsvf%amr%dy(lvl); dzi=1.0_WP/this%fsvf%amr%dz(lvl)
+        dx = this%fsvf%amr%dx(lvl)
+        dy = this%fsvf%amr%dy(lvl)
+        dz = this%fsvf%amr%dz(lvl)
+        ! print *, "DXI = ", dxi,dyi,dzi
+        call this%fsvf%amr%mfiter_build(lvl,mfi)
+        do while (mfi%next())
+            pSTFx =>STFx(lvl)%dataptr(mfi)
+            pSTFy =>STFy(lvl)%dataptr(mfi)
+            pSTFz =>STFz(lvl)%dataptr(mfi)
+
+            pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
+            
+            pSTFx_viz =>this%ST_x_force%mf(lvl)%dataptr(mfi)
+            pSTFy_viz =>this%ST_y_force%mf(lvl)%dataptr(mfi)
+            pSTFz_viz =>this%ST_z_force%mf(lvl)%dataptr(mfi)
+
+            pSTFx_viz_CSF =>this%CSF_x_force%mf(lvl)%dataptr(mfi)
+            pSTFy_viz_CSF =>this%CSF_y_force%mf(lvl)%dataptr(mfi)
+            pSTFz_viz_CSF =>this%CSF_z_force%mf(lvl)%dataptr(mfi)
+
+            pVF   =>this%fsvf%VF%mf(lvl)%dataptr(mfi)
+            pSubVF=>this%fsvf%subVF%dataptr(mfi)
+            pCurv =>this%fsvf%curv%dataptr(mfi)
+            pSD   =>this%fsvf%SD%dataptr(mfi)
+            ! Stresses are evaluated at cell faces, but they are stored at the cell center.
+            ! It is still the normal positive faces that we compute from, so the forces are computed the same way
+            bx=mfi%tilebox() 
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                ! X Forces
+                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dyi*dzi+ &
+                                (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dzi
+                if(.not. this%TwoD) then 
+                    pSTFx(i,j,k,1) = pSTFx(i,j,k,1) + &
+                                (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi
+                endif
+                VF_f=pVF(i,j,k,1)
+                pSTFx(i,j,k,1) = pSTFx(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+                pSTFx_viz(i,j,k,1) = pSTFx(i,j,k,1)
+
+                ! CSF
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i-1:i,j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i-1:i,j,k,1)*pCurv(i-1:i,j,k,1))/mysurf
+                pSTFx_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i-1,j,k,1))*dxi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+
+                ! Y Forces
+                pSTFy(i,j,k,1)= (pSigma_y(i,j,k,1)-pSigma_y(i-1,j,k,1)) * dyi*dzi + &
+                                (pSigma_y(i,j,k,2)-pSigma_y(i,j-1,k,2)) * dxi*dzi
+                if(.not. this%TwoD) then 
+                    pSTFy(i,j,k,1) = pSTFy(i,j,k,1) + &
+                                (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi
+                endif
+                VF_f=pVF(i,j,k,1)
+                pSTFy(i,j,k,1) = pSTFy(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+                pSTFy_viz(i,j,k,1) = pSTFy(i,j,k,1)
+
+                ! CSF
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i,j-1:j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j-1:j,k,1)*pCurv(i,j-1:j,k,1))/mysurf
+                pSTFy_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j-1,k,1))*dyi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+
+                ! Z Forces
+                pSTFz(i,j,k,1)= 0.0_WP
+                if(.not. this%TwoD) then 
+                    pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dyi*dzi + &
+                                    (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dzi + &
+                                    (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi
+                endif
+
+                VF_f=pVF(i,j,k,1)
+                pSTFz(i,j,k,1) = pSTFz(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+                pSTFz_viz(i,j,k,1) = pSTFz(i,j,k,1)
+
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i,j,k-1:k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j,k-1:k,1)*pCurv(i,j,k-1:k,1))/mysurf
+                pSTFz_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j,k-1,1))*dzi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+            end do; end do; end do
+        enddo 
+
+        ! Fill same-level ghost cells, including periodic boundaries
+        call STFx(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFy(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFz(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+
+        call this%fsvf%amr%mfiter_destroy(mfi)  
+        ! print *, "END update_surface_tension_forces"       
+    end subroutine update_surface_tension_forces_pressure
 
 
     ! ============================================================================
@@ -765,5 +1111,195 @@ contains
     end subroutine update_surface_tension_forces_ellipsoid 
 
     
+    ! ==================================================================================
+    ! Smoothing Methods
+    ! ==================================================================================
+    !> Apply 3D Laplacian smoothing to cell-centered surface tension forces.
+    !>
+    !> F_s(i,j,k) = 0.5 F(i,j,k)
+    !>            + (1/12) [ F(i+1,j,k) + F(i-1,j,k)
+    !>                     + F(i,j+1,k) + F(i,j-1,k)
+    !>                     + F(i,j,k+1) + F(i,j,k-1) ]
+    !>
+    !> STFx, STFy, STFz are modified in place.
+    subroutine apply_laplacian_smoothing(this, STFx, STFy, STFz)
+        use amrex_amr_module, only: amrex_multifab
+        implicit none
+        class(amrist), intent(inout) :: this
+        type(amrex_multifab), dimension(:), allocatable, intent(inout) :: &
+            STFx, STFy, STFz
+        type(amrex_multifab) :: STFx_smooth, STFy_smooth, STFz_smooth
+        type(amrex_mfiter) :: mfi
+        type(amrex_box) :: bx
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: &
+            pFx, pFy, pFz
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: &
+            pFx_s, pFy_s, pFz_s
+        real(WP), parameter :: center_weight   = 0.5_WP
+        real(WP), parameter :: neighbor_weight = 1.0_WP/12.0_WP
+        integer :: lvl, i, j, k
+        ! ============================================================
+        ! Surface tension is calculated on the finest level
+        ! ============================================================
+        lvl = this%fsvf%amr%maxlvl
+        ! print *, "LVL"
+        ! ============================================================
+        ! Build temporary cell-centered MultiFabs
+        ! ============================================================
+        call this%fsvf%amr%mfab_build(lvl, STFx_smooth, ncomp=1, nover=1)
+        call this%fsvf%amr%mfab_build(lvl, STFy_smooth, ncomp=1, nover=1)
+        call this%fsvf%amr%mfab_build(lvl, STFz_smooth, ncomp=1, nover=1)
 
+        call STFx_smooth%setval(0.0_WP)
+        call STFy_smooth%setval(0.0_WP)
+        call STFz_smooth%setval(0.0_WP)
+        ! print *, "Build"
+        ! ============================================================
+        ! Fill force ghost cells
+        !
+        ! Required because the stencil accesses:
+        !   i +/- 1
+        !   j +/- 1
+        !   k +/- 1
+        ! ============================================================
+        call STFx(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFy(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFz(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        ! print *, "Fill Boundary"
+        ! ============================================================
+        ! Apply 3D Laplacian smoothing
+        ! ============================================================
+
+        call this%fsvf%amr%mfiter_build(lvl, mfi)
+        ! print *, "mfiter build"
+        do while (mfi%next())
+
+            ! Original force fields
+            pFx => STFx(lvl)%dataptr(mfi)
+            pFy => STFy(lvl)%dataptr(mfi)
+            pFz => STFz(lvl)%dataptr(mfi)
+
+            ! Smoothed force fields
+            pFx_s => STFx_smooth%dataptr(mfi)
+            pFy_s => STFy_smooth%dataptr(mfi)
+            pFz_s => STFz_smooth%dataptr(mfi)
+            ! Cell-centered valid region
+            bx = mfi%tilebox()
+
+            do k = bx%lo(3), bx%hi(3)
+                do j = bx%lo(2), bx%hi(2)
+                    do i = bx%lo(1), bx%hi(1)
+
+                        ! ================================================
+                        ! X component
+                        ! ================================================
+
+                        pFx_s(i,j,k,1) = &
+                                center_weight*pFx(i,j,k,1) &
+                            + neighbor_weight*( &
+                                    pFx(i+1,j,k,1) &
+                                + pFx(i-1,j,k,1) &
+                                + pFx(i,j+1,k,1) &
+                                + pFx(i,j-1,k,1) &
+                                + pFx(i,j,k+1,1) &
+                                + pFx(i,j,k-1,1) )
+
+                        ! print *, "X Smoothing"
+                        ! ================================================
+                        ! Y component
+                        ! ================================================
+
+                        ! pFy_s(i,j,k,1) = &
+                        !         center_weight*pFy(i,j,k,1) &
+                        !     + neighbor_weight*( &
+                        !             pFy(i+1,j,k,1) &
+                        !         + pFy(i-1,j,k,1) &
+                        !         + pFy(i,j+1,k,1) &
+                        !         + pFy(i,j-1,k,1) &
+                        !         + pFy(i,j,k+1,1) &
+                        !         + pFy(i,j,k-1,1) )
+
+                        ! ! print *, "Y Smoothing"
+                        ! ! ================================================
+                        ! ! Z component
+                        ! ! ================================================
+
+                        ! pFz_s(i,j,k,1) = &
+                        !         center_weight*pFz(i,j,k,1) &
+                        !     + neighbor_weight*( &
+                        !             pFz(i+1,j,k,1) &
+                        !         + pFz(i-1,j,k,1) &
+                        !         + pFz(i,j+1,k,1) &
+                        !         + pFz(i,j-1,k,1) &
+                        !         + pFz(i,j,k+1,1) &
+                        !         + pFz(i,j,k-1,1) )
+                        ! pFx_s(i,j,k,1) = pFx(i,j,k,1)
+                        pFy_s(i,j,k,1) = pFy(i,j,k,1)
+                        pFz_s(i,j,k,1) = pFz(i,j,k,1)
+                        ! print *, "Z Smoothing"
+                    end do
+                end do
+            end do
+
+        end do
+
+        call this%fsvf%amr%mfiter_destroy(mfi)
+
+
+        ! ============================================================
+        ! Copy smoothed values back into original force fields
+        ! ============================================================
+
+        call this%fsvf%amr%mfiter_build(lvl, mfi)
+
+        do while (mfi%next())
+
+        ! Original force fields
+        pFx => STFx(lvl)%dataptr(mfi)
+        pFy => STFy(lvl)%dataptr(mfi)
+        pFz => STFz(lvl)%dataptr(mfi)
+
+        ! Smoothed force fields
+        pFx_s => STFx_smooth%dataptr(mfi)
+        pFy_s => STFy_smooth%dataptr(mfi)
+        pFz_s => STFz_smooth%dataptr(mfi)
+
+        ! Only replace valid cell-centered values
+        bx = mfi%tilebox()
+
+        do k = bx%lo(3), bx%hi(3)
+            do j = bx%lo(2), bx%hi(2)
+                do i = bx%lo(1), bx%hi(1)
+
+                    pFx(i,j,k,1) = pFx_s(i,j,k,1)
+                    pFy(i,j,k,1) = pFy_s(i,j,k,1)
+                    pFz(i,j,k,1) = pFz_s(i,j,k,1)
+
+                end do
+            end do
+        end do
+
+        end do
+
+        call this%fsvf%amr%mfiter_destroy(mfi)
+
+
+        ! ============================================================
+        ! Refresh ghost cells after replacing the valid values
+        ! ============================================================
+
+        call STFx(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFy(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFz(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        ! print *, "Fill Boundary 2"
+
+        ! ============================================================
+        ! Destroy temporary MultiFabs
+        ! ============================================================
+
+        call this%fsvf%amr%mfab_destroy(STFx_smooth)
+        call this%fsvf%amr%mfab_destroy(STFy_smooth)
+        call this%fsvf%amr%mfab_destroy(STFz_smooth)
+        ! print *, "Destoyred"
+    end subroutine apply_laplacian_smoothing
 end module amrist_class
