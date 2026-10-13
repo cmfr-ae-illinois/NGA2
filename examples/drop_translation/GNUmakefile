@@ -1,5 +1,5 @@
 # NGA location if not yet defined
-NGA_HOME ?= ../..
+NGA_HOME ?= /home/parinht2/Repositories/test/NGA2
 
 # Compilation parameters
 PRECISION = DOUBLE
@@ -23,9 +23,9 @@ INCLUDE_LOCATIONS += $(Ulocs)
 VPATH_LOCATIONS   += $(Ulocs)
 
 # Define external libraries - this can also be in .profile
-#HYPRE_DIR = 
-#IRL_DIR   = 
-#LAPACK_DIR= 
+HYPRE_DIR = /home/parinht2/Builds/hypre
+IRL_DIR   = /home/parinht2/Builds/irl
+LAPACK_DIR= /usr
 
 # NGA compilation definitions
 include $(NGA_HOME)/tools/GNUMake/Make.defs

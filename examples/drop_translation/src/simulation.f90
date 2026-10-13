@@ -43,8 +43,9 @@ module simulation
    
    !> Problem definition
    real(WP), dimension(3) :: center,vel
-   real(WP) :: radius
+   real(WP) :: radius,RMSVELOCITY
    integer :: npart
+   character(len = 1000) :: MonitorFileName
 
 contains
    
@@ -59,6 +60,33 @@ contains
       G=radius-sqrt(sum((xyz-center)**2))
    end function levelset_sphere
 
+   !> function to calculate rms velocity
+   function calc_RMS_velocity() result(Vrms)
+      use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM
+      use parallel, only: MPI_REAL_WP
+      implicit none
+      integer :: i,j,k,ierr
+      real(WP) :: Vrms,local_sum,global_sum,local_vol,global_vol,vel_norm
+      
+      local_sum = 0.0_WP
+      local_vol = 0.0_WP
+      ! Loop over owned cells only and integrate over the physical volume.
+      do i = cfg%imin_,cfg%imax_
+         do j = cfg%jmin_,cfg%jmax_
+            do k = cfg%kmin_,cfg%kmax_
+               local_sum = local_sum + cfg%vol(i,j,k)*((Ui(i,j,k)-vel(1))**2 + &
+               &                                       (Vi(i,j,k)-vel(2))**2 + &
+               &                                       (Wi(i,j,k)-vel(3))**2)
+               local_vol = local_vol + cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+      call MPI_ALLREDUCE(local_sum,global_sum,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      call MPI_ALLREDUCE(local_vol,global_vol,1,MPI_REAL_WP,MPI_SUM,cfg%comm,ierr)
+      Vrms = sqrt(global_sum/global_vol)
+      vel_norm = sqrt(vel(1)*vel(1) + vel(2)*vel(2) + vel(3)*vel(3))
+      if (vel_norm.gt.0.0_WP) Vrms = Vrms / vel_norm
+   end function calc_RMS_velocity
    
    !> Initialization of problem solver
    subroutine simulation_init
@@ -90,7 +118,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben
+         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben,jibbenPU,plicnet,PUppic,jibbenSq,cf,pucf
          use mpi_f08,  only: MPI_WTIME
          use string,   only: str_medium,lowercase
          integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
@@ -101,7 +129,7 @@ contains
          integer, parameter :: amr_ref_lvl=5
          real(WP) :: start, finish
          ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=jibben,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=PUppic,name='VOF')
          ! Initialize two droplets
          call param_read('Droplet diameter',radius); radius=0.5_WP*radius
          ! call param_read('Droplet 1 position',center)      
@@ -289,6 +317,25 @@ contains
          ! Output to vtk
          if (vtk_evt%occurs()) call vtk_out%write_data(time%t)
       end block create_vtk
+
+      create_monitor: block
+         ! Prepare some info about fields
+         call fs%get_cfl(time%dt,time%cfl)
+         call fs%get_max()
+         ! call print_curvature_error()
+         call vf%get_max()
+         ! Create simulation monitor
+         call param_read('Monitor File Name',MonitorFileName)
+         mfile=monitor(fs%cfg%amRoot,MonitorFileName)
+         call mfile%add_column(time%n,'Timestep number')
+         call mfile%add_column(time%t,'Time')
+         call mfile%add_column(time%dt,'Timestep size')
+
+         RMSVELOCITY = calc_RMS_velocity()
+         call mfile%add_column(RMSVELOCITY,'RMS Velocity')
+
+         call mfile%write()         
+      end block create_monitor
             
    end subroutine simulation_init
    
@@ -406,6 +453,9 @@ contains
             end block update_pmesh
             call vtk_out%write_data(time%t)
          end if
+
+         RMSVELOCITY = calc_RMS_velocity()
+         call mfile%write() 
                   
       end do
       

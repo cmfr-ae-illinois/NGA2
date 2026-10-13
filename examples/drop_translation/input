@@ -1,29 +1,31 @@
 # Parallelization
-Partition : 8 1 1
+Partition : 3 2 1
 
 # Mesh definition
-Lx :	1.0
-Ly :	1.0
+Lx :    1.0
+Ly :    1.0
 Lz :  1.0
-nx :	20
-ny :	20
-nz :	20
+nx :    32
+ny :    32
+nz :    32
+
+Monitor File Name : cf_parab_curvature
 
 # Droplet definiton
-Droplet diameter :           5.0e-1
-Droplet velocity :           1 2 3
+Droplet diameter :           0.4
+Droplet velocity :           0.5 1.0 1.5
 
 # Fluid properties
-Liquid dynamic viscosity :    1.0e-3
-Gas dynamic viscosity :       1.0e-3
-Liquid density :              1
-Gas density :                 1
+Liquid dynamic viscosity :    0.1
+Gas dynamic viscosity :       0.1
+Liquid density :              300
+Gas density :                 300
 Surface tension coefficient : 0.1
 
 # Time integration
 Max timestep size : 1e-2
 Max cfl number :    1.0
-Max time :          1.0
+Max time :          15
 
 # Pressure solver
 Pressure tolerance : 1e-6
