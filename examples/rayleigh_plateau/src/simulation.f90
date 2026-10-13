@@ -54,6 +54,113 @@ module simulation
 
 contains
 
+   subroutine compute_rp_radii(state)
+      class(vfs), intent(in) :: state
+      call compute_rp_max_radius(state)
+      call compute_rp_min_radius(state)
+   end subroutine compute_rp_radii
+
+   subroutine compute_rp_max_radius(this)
+      use mpi_f08, only: MPI_ALLREDUCE, MPI_MAX, MPI_SUM, MPI_DOUBLE_PRECISION
+      use mathtools, only: Pi
+      implicit none
+
+      class(vfs), intent(in) :: this
+      integer :: i,j,k,ierr,nk
+      real(WP) :: radius_k
+      real(WP) :: max_radius_local, max_radius_global
+      real(WP), allocatable, dimension(:) :: slice_volume_local, slice_volume_global
+
+      allocate(slice_volume_local(this%cfg%kmin:this%cfg%kmax))
+      allocate(slice_volume_global(this%cfg%kmin:this%cfg%kmax))
+
+      slice_volume_local  = 0.0_WP
+      slice_volume_global = 0.0_WP
+
+      ! Accumulate local contribution to each global z-slice
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               slice_volume_local(k) = slice_volume_local(k) + &
+                  this%VF(i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+
+      nk = this%cfg%kmax - this%cfg%kmin + 1
+
+      ! Sum slice volumes entrywise across all ranks
+      call MPI_ALLREDUCE(slice_volume_local, slice_volume_global, nk, &
+         MPI_DOUBLE_PRECISION, MPI_SUM, this%cfg%comm, ierr)
+
+      max_radius_local = 0.0_WP
+
+      do k=this%cfg%kmin,this%cfg%kmax
+         if (slice_volume_global(k) .gt. 0.0_WP) then
+            radius_k = sqrt(slice_volume_global(k)/(Pi*this%cfg%dz(k)))
+            if (radius_k .gt. max_radius_local) max_radius_local = radius_k
+         end if
+      end do
+
+      call MPI_ALLREDUCE(max_radius_local, max_radius_global, 1, &
+         MPI_DOUBLE_PRECISION, MPI_MAX, this%cfg%comm, ierr)
+
+      r_max = max_radius_global
+
+      deallocate(slice_volume_local, slice_volume_global)
+   end subroutine compute_rp_max_radius
+
+   subroutine compute_rp_min_radius(this)
+      use mpi_f08, only: MPI_ALLREDUCE, MPI_MIN, MPI_SUM, MPI_DOUBLE_PRECISION
+      use mathtools, only: Pi
+      implicit none
+
+      class(vfs), intent(in) :: this
+      integer :: i,j,k,ierr,nk
+      real(WP) :: radius_k
+      real(WP) :: min_radius_local, min_radius_global
+      real(WP), allocatable :: slice_volume_local(:), slice_volume_global(:)
+
+      allocate(slice_volume_local(this%cfg%kmin:this%cfg%kmax))
+      allocate(slice_volume_global(this%cfg%kmin:this%cfg%kmax))
+
+      slice_volume_local  = 0.0_WP
+      slice_volume_global = 0.0_WP
+
+      ! Accumulate local contribution to each global z-slice
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+               slice_volume_local(k) = slice_volume_local(k) + &
+                  this%VF(i,j,k)*this%cfg%vol(i,j,k)
+            end do
+         end do
+      end do
+
+      nk = this%cfg%kmax - this%cfg%kmin + 1
+
+      ! Sum slice volumes entrywise across all ranks
+      call MPI_ALLREDUCE(slice_volume_local, slice_volume_global, nk, &
+         MPI_DOUBLE_PRECISION, MPI_SUM, this%cfg%comm, ierr)
+
+      min_radius_local = huge(1.0_WP)
+
+      do k=this%cfg%kmin,this%cfg%kmax
+         if (slice_volume_global(k) .gt. 0.0_WP) then
+            radius_k = sqrt(slice_volume_global(k)/(Pi*this%cfg%dz(k)))
+            if (radius_k .lt. min_radius_local) min_radius_local = radius_k
+         end if
+      end do
+
+      call MPI_ALLREDUCE(min_radius_local, min_radius_global, 1, &
+         MPI_DOUBLE_PRECISION, MPI_MIN, this%cfg%comm, ierr)
+
+      r_min = min_radius_global
+
+      deallocate(slice_volume_local, slice_volume_global)
+   end subroutine compute_rp_min_radius
+
+
    !> modified bessel functions of first kind
    function bessel_i0(x) result(val)
       implicit none
@@ -163,7 +270,7 @@ contains
          integer, parameter :: amr_ref_lvl=5
          real(WP) :: start, finish
          ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=PUppic,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,name='VOF')
          ! Reading ligament parameters
          call param_read('Ligament radius',radius)
          call param_read('Ligament center',center,default=[0.0_WP,0.0_WP,0.0_WP])
@@ -490,11 +597,9 @@ contains
          call fs%get_olddensity(vf=vf)
 
          ! VOF solver step
-         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W)
+         call vf%advance(dt=time%dt,U=fs%U,V=fs%V,W=fs%W,diagnostics_callback=compute_rp_radii)
 
          ! monitor variables for diagonistics
-         r_max = vf%max_radius
-         r_min = vf%min_radius
          time_nd = time%t / time_cap
          call mfile%write()
 
