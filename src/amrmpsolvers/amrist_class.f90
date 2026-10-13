@@ -29,7 +29,7 @@ module amrist_class
 
         ! Options
         real(WP), dimension(3) :: MarangoniOption
-        integer :: SurfaceTensionOption,CurvatureOption,SmoothingOption
+        integer :: SurfaceTensionOption,CurvatureOption,SmoothingOption,LevelsetOption
         logical :: TwoD
         real(WP) :: PressureOption
         real(WP) :: PU_spread
@@ -396,8 +396,7 @@ contains
             ! cen = calculateCentroid(polygon)
             cen = (/this%fsvf%amr%xlo+real(i  ,WP)*dx,this%fsvf%amr%ylo+real(j  ,WP)*dy,this%fsvf%amr%zlo+real(k  ,WP)*dz/)
             cen = cen + (/dx/2.0_WP,dy/2.0_WP,dz/2.0_WP/)
-           
-            
+        
             if (getNumberOfVertices(polygon).lt.3) then
                 ! print *,"WARNING: DEGENERATE POLYGON IN PU NEIGHBORHOOD" 
                 ! print *, "i,j,k =", i,j,k
@@ -408,9 +407,6 @@ contains
                 ! print *, "lvl =", lvl
                 ! print *, cen
             endif
-
-           
-            
 
             ! Compute VF Weight
             weight_vf = 1.0_WP 
@@ -524,18 +520,20 @@ contains
         end do
 
         ! Here we make the forces
+        ! print *, "Before Force Update"
         call this%update_surface_tension_forces_pressure(STFx,STFy,STFz)
+        ! print *, "After Force Update"
         ! Apply Smoothing
         ! print *, "Smoothing Option Inside: ",this%SmoothingOption
-        select case (this%SmoothingOption)
-            case (1)
-                ! No smoothing
-            case (2)
-                ! print *, "Laplacian Smoothing"
-                call this%apply_laplacian_smoothing(STFx,STFy,STFz)
-            case default
-                ! No smoothing
-        end select
+        ! select case (this%SmoothingOption)
+        !     case (1)
+        !         ! No smoothing
+        !     case (2)
+        !         ! print *, "Laplacian Smoothing"
+        !         call this%apply_laplacian_smoothing(STFx,STFy,STFz)
+        !     case default
+        !         ! No smoothing
+        ! end select
 
         ! Average down face fluxes from finest to coarser levels
         ! print *,"Average Down"
@@ -569,15 +567,59 @@ contains
     real(WP), intent(in) :: scale
     type(amrex_multifab), intent(in) :: Fx(0:),Fy(0:),Fz(0:)
 
-    integer :: lvl
+    type(amrex_box) :: bx
+    type(amrex_mfiter) :: mfi
+    integer :: lvl,i,j,k
 
+    real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pFx,pFy,pFz
+
+    ! do lvl=0,this%fsvf%amr%clvl()
+    !     ! Cell-centered velocity
+    !     call this%fsvf%Q%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
+    !     call this%fsvf%Q%mf(lvl)%saxpy(scale,Fy(lvl),1,2,1,0)
+    !     call this%fsvf%Q%mf(lvl)%saxpy(scale,Fz(lvl),1,3,1,0)
+    ! end do
+
+    ! Traverse levels
     do lvl=0,this%fsvf%amr%clvl()
-        ! Cell-centered velocity
-        call this%fsvf%Q%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
-        call this%fsvf%Q%mf(lvl)%saxpy(scale,Fy(lvl),1,2,1,0)
-        call this%fsvf%Q%mf(lvl)%saxpy(scale,Fz(lvl),1,3,1,0)
+
+        ! Loop over tiles
+        call this%fsvf%amr%mfiter_build(lvl,mfi)
+        do while (mfi%next())
+
+            ! Get pointers to data
+            pQ =>this%fsvf%Q%mf(lvl)%dataptr(mfi)
+            pFx=>Fx(lvl)%dataptr(mfi)
+            pFy=>Fy(lvl)%dataptr(mfi)
+            pFz=>Fz(lvl)%dataptr(mfi)
+
+            ! Get cell-centered tile box
+            bx=mfi%tilebox()
+
+            ! Update cell-centered velocity
+            do k=bx%lo(3),bx%hi(3)
+                do j=bx%lo(2),bx%hi(2)
+                    do i=bx%lo(1),bx%hi(1)
+
+                    pQ(i,j,k,1)=pQ(i,j,k,1)+scale*pFx(i,j,k,1)
+                    pQ(i,j,k,2)=pQ(i,j,k,2)+scale*pFy(i,j,k,1)
+                    pQ(i,j,k,3)=pQ(i,j,k,3)+scale*pFz(i,j,k,1)
+
+                    end do
+                end do
+            end do
+
+        end do
+        call this%fsvf%amr%mfiter_destroy(mfi)
+
     end do
 
+    ! Synchronize Q ghost cells
+    do lvl=0,this%fsvf%amr%clvl()
+        call this%fsvf%Q%mf(lvl)%fill_boundary( &
+            this%fsvf%amr%geom(lvl))
+    end do
+    
     ! Reconstruct face-centered velocities from Q
     call this%fsvf%get_face_velocity()
     ! Update Boundaries
@@ -868,17 +910,23 @@ contains
         class(amrist), intent(inout) :: this
         type(PUST_RectCub_type) :: solver
         real(WP) :: dx,dy,dz
-        integer :: lvl,i,j,k 
+        real(WP) :: adjacentVF
+        integer :: lvl,i,j,k,count
         integer :: i_in,j_in, k_in 
         integer :: shift_first_index,shift_second_index
-        real(WP), dimension(1:3) :: dvec,shift
+        real(WP), dimension(1:3) :: dvec,shift,face_normal
         real(WP), dimension(1:3) :: pressure_cell_center,velocity_cell_center,face_center 
-        real(WP), dimension(1:3) :: force
+        real(WP), dimension(1:3) :: force,force2
         real(WP), dimension(1:3) :: P0,P1,P2,P3 
         type(PUNeigh_RectCub_type) :: neighborhood,neighborhood_trimmed
         type(amrex_box) :: bx
         type(amrex_mfiter) :: mfi
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        integer, dimension(1:3) :: shift_index_normal
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pPLIC
+        type(pic_container), dimension(:,:,:,:), contiguous, pointer :: pPIC
+        type(pic_container) :: interface_component,adjacent_interface_component
+        type(SeparatorVariant_type) :: interface_component_variant,adjacent_interface_component_variant
 
         ! print *, "START update_surface_tension_stresses"
         lvl = this%fsvf%amr%maxlvl 
@@ -898,6 +946,11 @@ contains
             pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
             pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
             pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
+
+            pVF => this%fsvf%VF%mf(lvl)%dataptr(mfi)
+            pPIC => this%fsvf%PIC%dataptr(mfi)
+            pPLIC=>this%fsvf%PLIC%dataptr(mfi)
+
             bx = mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
 
@@ -922,10 +975,14 @@ contains
                 ! Get Stresses 
                 pressure_cell_center = (/this%fsvf%amr%xlo+real(i  ,WP)*dx,this%fsvf%amr%ylo+real(j  ,WP)*dy,this%fsvf%amr%zlo+real(k  ,WP)*dz/)
                 pressure_cell_center = pressure_cell_center + dvec/2
-                do j_in = 1,3 
+                do j_in = 1,3  ! J Corresponds to the normal of the face - 1=X,2=Y,3=Z
                     force = (/0.0_WP,0.0_WP,0.0_WP/)
                     ! Shift from velocity cell center ot the face center we are looking at:
-                    shift = (/0.0_WP,0.0_WP,0.0_WP/)  
+                    shift = (/0.0_WP,0.0_WP,0.0_WP/) 
+                    shift_index_normal = (/0,0,0/)
+                    shift_index_normal(j_in) = 1
+                    face_normal = (/0.0_WP,0.0_WP,0.0_WP/)
+                    face_normal(j_in) = 1.0_WP
                     shift(j_in) = dvec(j_in)/2
                     face_center = pressure_cell_center + shift
                     ! Now that we have the face center and normal direction (all positive normals)
@@ -963,13 +1020,53 @@ contains
                     shift(shift_first_index) = -shift(shift_first_index)
                     shift(shift_second_index) = shift(shift_second_index)
                     P3 = face_center + shift
+                    
+                    ! This computes it in the originalk face, using the original method
+                    SELECT CASE (this%LevelsetOption)
+                        case (2)
+                            ! In the paraboloid representation of the interface, we need to do the current cell and the adjacent cell passing in. 
+                            ! First do current cell, as always
+                            adjacentVF = pVF(i,j,k,1)
+                            force = (/0.0_WP,0.0_WP,0.0_WP/)
+                            count = 0.0_WP
+                            if(adjacentVF .gt. 1e-9 .and. adjacentVF .lt. 1.0_WP - 1e-9) then 
+                                interface_component = pPIC(i,j,k,1)
+                                call new(interface_component_variant,interface_component)
+                                call solveFaceParaboloid(solver,this%fsvf%sigma,P0,P1,P2,P3,interface_component_variant,this%PressureOption,this%MarangoniOption,force)
+                                ! Make sure that force is in the same direction as face normal
+                                if(sum(force*face_normal) .lt. -1e-12) then
+                                    force = -force
+                                endif
+                                count = count + 1.0_WP
+                            endif
 
-                    ! Now that we have the face corners, run the code and get the force
-                    ! if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
-                    ! print *, "Marangoni Option:",this%MarangoniOption
-                    
-                    call solveFace(solver,this%fsvf%sigma,P0,P1,P2,P3,this%PU_spread*dx,this%PressureOption,this%MarangoniOption,force)
-                    
+                            ! If adjacent cell in the face normal direction is nonempty, do it there too
+                            adjacentVF = pVF(i+shift_index_normal(1),j+shift_index_normal(2),k+shift_index_normal(3),1)
+                            force2 = (/0.0_WP,0.0_WP,0.0_WP/)
+                            if(adjacentVF .gt. 1e-9 .and. adjacentVF .lt. 1.0_WP - 1e-9) then 
+                                adjacent_interface_component = pPIC(i+shift_index_normal(1),j+shift_index_normal(2),k+shift_index_normal(3),1)
+                                call new(adjacent_interface_component_variant,adjacent_interface_component)
+                                call solveFaceParaboloid(solver,this%fsvf%sigma,P0,P1,P2,P3,adjacent_interface_component_variant,this%PressureOption,this%MarangoniOption,force2)
+                                ! Make sure that force is in the same direction as face normal
+                                if(sum(force2*face_normal) .lt. -1e-12) then
+                                    force2 = -force2
+                                endif
+                                ! Now average two forces for the face
+                                count = count + 1.0_WP
+                            endif
+                            if(count .gt. 1e-12) then 
+                                force = (force+force2)/count
+                            else 
+                                force = (/0.0_WP,0.0_WP,0.0_WP/)
+                            endif
+                            
+                        CASE DEFAULT
+                            call solveFace(solver,this%fsvf%sigma,P0,P1,P2,P3,this%PU_spread*dx,this%PressureOption,this%MarangoniOption,force)
+                    END SELECT
+                        
+                    ! if(sqrt(sum(force**2)).gt. 1) then 
+                    !     print *, "FORCE = ", force 
+                    ! endif
                     ! Now that we have the force, store it properly 
                     pSigma_x(i,j,k,j_in) = force(1)
                     pSigma_y(i,j,k,j_in) = force(2)
@@ -1003,7 +1100,9 @@ contains
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pSubVF,pCurv,pSD
         real(WP) :: VF_f,mysurf,mycurv
         ! print *, "START update_surface_tension_forces"
+        ! print *, "Before Stress Update"
         call this%update_surface_tension_stresses_pressure()
+        ! print *, "After Stress Update"
         ! Here we are going to compute the CSF Force for comparision
         lvl = this%fsvf%amr%maxlvl 
         dxi=1.0_WP/this%fsvf%amr%dx(lvl); dyi=1.0_WP/this%fsvf%amr%dy(lvl); dzi=1.0_WP/this%fsvf%amr%dz(lvl)
