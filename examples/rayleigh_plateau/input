@@ -12,6 +12,9 @@ nz : 64
 # monitor file name
 Monitor File Name : puppic
 
+# Interface reconstruction (case insensitive; defaults to plicnet)
+Reconstruction method : jibben
+
 # Ligament definiton
 Ligament radius :           0.10
 Ligament center :           0 0 0

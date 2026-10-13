@@ -259,18 +259,44 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben,plicnet,jibbenPU,jibbenSq,PUppic,jibbenPLIC,cf,pucf
+         use vfs_class,only: VFhi,VFlo,lvira,elvira,mof,wmof,r2p,youngs,lvlset,plicnet,r2pnet, &
+                            jibben,jibbenPU,jibbenSq,PUppic,PUplic,jibbenPLIC,cf,pucf
+         use messager, only: die
          use mpi_f08,  only: MPI_WTIME
          use string,   only: str_medium,lowercase
          integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
+         integer :: reconstruction_method
+         character(len=str_medium) :: read_reconstruction_method
          character(len=str_medium) :: read_curvature_method
          real(WP), dimension(3,8) :: cube_vertex
          real(WP), dimension(3) :: v_cent,a_cent
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=5
          real(WP) :: start, finish
-         ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=plicnet,name='VOF')
+         ! Select interface reconstruction from the input file
+         call param_read('Reconstruction method',read_reconstruction_method,default='plicnet')
+         select case (trim(lowercase(read_reconstruction_method)))
+         case ('lvira'); reconstruction_method=lvira
+         case ('elvira'); reconstruction_method=elvira
+         case ('mof'); reconstruction_method=mof
+         case ('wmof'); reconstruction_method=wmof
+         case ('r2p'); reconstruction_method=r2p
+         case ('youngs'); reconstruction_method=youngs
+         case ('lvlset'); reconstruction_method=lvlset
+         case ('plicnet'); reconstruction_method=plicnet
+         case ('r2pnet'); reconstruction_method=r2pnet
+         case ('jibben'); reconstruction_method=jibben
+         case ('jibbenpu'); reconstruction_method=jibbenPU
+         case ('jibbensq'); reconstruction_method=jibbenSq
+         case ('puppic'); reconstruction_method=PUppic
+         case ('puplic'); reconstruction_method=PUplic
+         case ('jibbenplic'); reconstruction_method=jibbenPLIC
+         case ('cf'); reconstruction_method=cf
+         case ('pucf'); reconstruction_method=pucf
+         case default
+            call die('[rayleigh_plateau] Unknown reconstruction method: '//trim(read_reconstruction_method))
+         end select
+         call vf%initialize(cfg=cfg,reconstruction_method=reconstruction_method,name='VOF')
          ! Reading ligament parameters
          call param_read('Ligament radius',radius)
          call param_read('Ligament center',center,default=[0.0_WP,0.0_WP,0.0_WP])
