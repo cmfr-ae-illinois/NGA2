@@ -923,13 +923,13 @@ contains
       call this%subcell_vol()
       
       ! Calculate curvature
-      ! call this%get_curvature()
+      call this%get_curvature()
 
       ! Perform PPIC reconstruction
       if (this%ppic) call this%build_quadratic_interface()
 
       ! ! Calculate curvature
-      call this%get_curvature()
+      ! call this%get_curvature()
 
       ! Observe the transported volume fraction before resetting volume moments
       if (present(diagnostics_callback)) call diagnostics_callback(this)
