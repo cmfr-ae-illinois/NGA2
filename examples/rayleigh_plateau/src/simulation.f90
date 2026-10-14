@@ -484,7 +484,7 @@ contains
          call vf%update_surfmesh(smesh)
          ! Also populate nplane variable
          call add_surfgrid_variable(smesh,1,vf%curv)  
-         call add_surfgrid_variable(smesh,1,vf%interface_type)    
+         call add_surfgrid_variable(smesh,2,vf%interface_type)    
       end block create_smesh
 
       ! Initialize our tracer particle tracker
