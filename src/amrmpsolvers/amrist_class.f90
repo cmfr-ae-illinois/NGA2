@@ -840,11 +840,11 @@ contains
             ! X Faces
             bx=mfi%nodaltilebox(1) 
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dyi*dzi+ &
-                                (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dzi
+                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dxi*dyi*dzi+ &
+                                (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dyi*dzi
                 if(.not. this%TwoD) then 
                     pSTFx(i,j,k,1) = pSTFx(i,j,k,1) + &
-                                (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi
+                                (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi*dzi
                 endif
                 VF_f=0.5_WP*(pSubVF(i-1,j,k,2)+pSubVF(i,j,k,1))
                 pSTFx(i,j,k,1) = pSTFx(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
@@ -860,11 +860,11 @@ contains
             ! Y Faces
             bx=mfi%nodaltilebox(2) 
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                pSTFy(i,j,k,1)= (pSigma_y(i,j,k,1)-pSigma_y(i-1,j,k,1)) * dyi*dzi + &
-                                (pSigma_y(i,j,k,2)-pSigma_y(i,j-1,k,2)) * dxi*dzi
+                pSTFy(i,j,k,1)= (pSigma_y(i,j,k,1)-pSigma_y(i-1,j,k,1)) * dxi*dyi*dzi + &
+                                (pSigma_y(i,j,k,2)-pSigma_y(i,j-1,k,2)) * dxi*dyi*dzi
                 if(.not. this%TwoD) then 
                     pSTFy(i,j,k,1) = pSTFy(i,j,k,1) + &
-                                (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi
+                                (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi*dzi
                 endif
                 VF_f=0.5_WP*(pSubVF(i,j-1,k,4)+pSubVF(i,j,k,3))
                 pSTFy(i,j,k,1) = pSTFy(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
@@ -881,9 +881,9 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                 pSTFz(i,j,k,1)= 0.0_WP
                 if(.not. this%TwoD) then 
-                    pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dyi*dzi + &
-                                    (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dzi + &
-                                    (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi
+                    pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dxi*dyi*dzi + &
+                                    (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dyi*dzi + &
+                                    (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi*dzi
                 endif
                 VF_f=0.5_WP*(pSubVF(i,j,k-1,6)+pSubVF(i,j,k,5))
                 pSTFz(i,j,k,1) = pSTFz(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
@@ -1137,11 +1137,11 @@ contains
             bx=mfi%tilebox() 
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                 ! X Forces
-                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dyi*dzi+ &
-                                (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dzi
+                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dxi*dyi*dzi+ &
+                                (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dyi*dzi
                 if(.not. this%TwoD) then 
                     pSTFx(i,j,k,1) = pSTFx(i,j,k,1) + &
-                                (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi
+                                (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi*dzi
                 endif
                 VF_f=pVF(i,j,k,1)
                 pSTFx(i,j,k,1) = pSTFx(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
@@ -1153,11 +1153,11 @@ contains
                 pSTFx_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i-1,j,k,1))*dxi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
 
                 ! Y Forces
-                pSTFy(i,j,k,1)= (pSigma_y(i,j,k,1)-pSigma_y(i-1,j,k,1)) * dyi*dzi + &
-                                (pSigma_y(i,j,k,2)-pSigma_y(i,j-1,k,2)) * dxi*dzi
+                pSTFy(i,j,k,1)= (pSigma_y(i,j,k,1)-pSigma_y(i-1,j,k,1)) * dxi*dyi*dzi + &
+                                (pSigma_y(i,j,k,2)-pSigma_y(i,j-1,k,2)) * dxi*dyi*dzi
                 if(.not. this%TwoD) then 
                     pSTFy(i,j,k,1) = pSTFy(i,j,k,1) + &
-                                (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi
+                                (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi*dzi
                 endif
                 VF_f=pVF(i,j,k,1)
                 pSTFy(i,j,k,1) = pSTFy(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
@@ -1171,9 +1171,9 @@ contains
                 ! Z Forces
                 pSTFz(i,j,k,1)= 0.0_WP
                 if(.not. this%TwoD) then 
-                    pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dyi*dzi + &
-                                    (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dzi + &
-                                    (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi
+                    pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dxi*dyi*dzi + &
+                                    (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dyi*dzi + &
+                                    (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi*dzi
                 endif
 
                 VF_f=pVF(i,j,k,1)
