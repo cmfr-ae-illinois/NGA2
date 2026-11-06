@@ -1,0 +1,39 @@
+# Parallelization
+Partition : 3 2 1
+
+# Mesh definition
+Lx :    1.0
+Ly :    1.0
+Lz :  1.0
+nx :    32
+ny :    32
+nz :    32
+
+Monitor File Name : puppic_vf2_lvira_La1200_We4200
+
+# Droplet definiton
+Droplet diameter :           0.4
+Droplet velocity :           0.5 1.0 1.5
+
+# Fluid properties
+Liquid dynamic viscosity :    0.1
+Gas dynamic viscosity :       0.1
+Liquid density :              300
+Gas density :                 300
+Surface tension coefficient : 0.1
+
+# Time integration
+Max timestep size : 1e-2
+Max cfl number :    1.0
+Max time :          15
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 1e-8
