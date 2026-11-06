@@ -96,7 +96,7 @@ contains
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
          use mms_geom, only: cube_refine_vol
-         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben,plicnet,jibbenPU,PUppic,jibbenPLIC,jibbenSq
+         use vfs_class,only: r2p,lvira,VFhi,VFlo,jibben,plicnet,jibbenPU,PUppic,jibbenPLIC,jibbenSq, PUppic_hf
          use mpi_f08,  only: MPI_WTIME
          use string,   only: str_medium,lowercase
          integer :: i,j,k,n,si,sj,sk,curvature_method,stencil_size,hf_backup_method
@@ -107,7 +107,7 @@ contains
          integer, parameter :: amr_ref_lvl=5
          real(WP) :: start, finish
          ! Create a VOF solver with r2p reconstruction
-         call vf%initialize(cfg=cfg,reconstruction_method=PUppic,name='VOF')
+         call vf%initialize(cfg=cfg,reconstruction_method=PUppic_hf,name='VOF')
          ! Reading ligament parameters
          call param_read('Drop 1 radius',r1)   
          call param_read('Drop 2 radius',r2)   
