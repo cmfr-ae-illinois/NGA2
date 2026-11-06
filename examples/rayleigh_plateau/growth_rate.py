@@ -17,7 +17,7 @@ mode = 1        # perturbation mode
 
 # liquid parameters
 rho = 1000.0    # density, kg/m^3
-#sigma = 2e-7   # surface tension, N/m
+# sigma = 2e-7   # surface tension, N/m
 sigma = 0.072
 mu = 0.001      # dynamic viscosity, Pa.s
 
@@ -88,7 +88,7 @@ rmin_weber_norm = (r0 - rmin_weber) / (r0 * eps)
 
 # reading simulation data
 # filename = "GrowthRate"
-filename = "/home/parinht2/Repositories/test/NGA2/examples/rayleigh_plateau/monitor/puppic"
+filename = "/home/parinht2/Repositories/test/NGA2/examples/rayleigh_plateau/monitor/plicnet"
 # filename = "/home/parinht2/Repositories/NGA2/examples/amr_rayleigh_plateau/monitor/rayleigh_plateau"
 data = np.loadtxt(filename, skiprows=2)
 
@@ -120,6 +120,26 @@ plt.plot(tstar, rmax_weber_norm, "--", label="Weber")
 
 plt.xlabel(r"Non-dimensional time, $t/t_{\mathrm{cap}}$")
 plt.ylabel(r"$(r_{\max}-r_0)/(r_0\epsilon)$")
+plt.yscale("log")
+plt.grid(True, which="both")
+plt.legend()
+#plt.tight_layout()
+plt.ylim(1,100)
+plt.xlim(0, 18)
+plt.show()
+
+# ============================================================
+# Min radius
+# ============================================================
+
+plt.figure(figsize=(7, 5))
+
+plt.plot(tstar_data, rmin_data_norm, "o", markersize=4, label="Simulation")
+plt.plot(tstar, rmin_rayleigh_norm, label="Rayleigh")
+plt.plot(tstar, rmin_weber_norm, "--", label="Weber")
+
+plt.xlabel(r"Non-dimensional time, $t/t_{\mathrm{cap}}$")
+plt.ylabel(r"$(r_{\min}-r_0)/(r_0\epsilon)$")
 plt.yscale("log")
 plt.grid(True, which="both")
 plt.legend()

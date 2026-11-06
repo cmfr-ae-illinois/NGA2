@@ -1,0 +1,50 @@
+# Parallelization
+Partition : 2 2 4
+
+# Mesh definition
+Lx : 1.0
+Ly : 1.0
+Lz : 1.0
+nx : 96
+ny : 96
+nz : 96
+
+# monitor file name
+Monitor File Name : plicnet_lowLa
+
+# Interface reconstruction (case insensitive; defaults to plicnet)
+Reconstruction method : plicnet
+
+# Ligament definiton
+Ligament radius :           0.10
+Ligament center :           0 0 0
+# Perturbation amplitude :    0.1
+Perturbation amplitude :    0.02
+Perturbation mode :         1
+
+# Velocity field
+Initial velocity :           0 0 0
+
+# Fluid properties
+Liquid dynamic viscosity :    1.0e-3
+Gas dynamic viscosity :       1.8e-5
+Liquid density :              1000
+Gas density :                 1
+Surface tension coefficient : 2.0e-7
+
+# Time integration
+Max timestep size : 10
+Max cfl number :    0.5
+Max time :          35000
+
+# Pressure solver
+Pressure tolerance : 1e-6
+Pressure iteration : 100
+
+# Implicit velocity solver
+Implicit tolerance : 1e-6
+Implicit iteration : 100
+
+# Ensight output
+Ensight output period : 100
+ 
