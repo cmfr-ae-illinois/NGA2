@@ -1125,7 +1125,61 @@ contains
                end if
                
             case (convective)   ! Not implemented yet!
-               
+            
+            ! case (wall)
+            !    stag=min(my_bc%dir,0)
+            !    select case (my_bc%face)
+            !       case ('x')
+            !          do n=1,my_bc%itr%n_
+            !             i=my_bc%itr%map(1,n)
+            !             j=my_bc%itr%map(2,n)
+            !             k=my_bc%itr%map(3,n)
+
+            !             ! No penetration
+            !             this%U(i,j,k)=0.0_WP
+
+            !             ! No slip: antisymmetric tangential velocities
+            !             this%V(i+stag,j:j+1,k) = &
+            !                -this%V(i-my_bc%dir+stag,j:j+1,k)
+
+            !             this%W(i+stag,j,k:k+1) = &
+            !                -this%W(i-my_bc%dir+stag,j,k:k+1)
+            !          end do
+
+            !       case ('y')
+            !          do n=1,my_bc%itr%n_
+            !             i=my_bc%itr%map(1,n)
+            !             j=my_bc%itr%map(2,n)
+            !             k=my_bc%itr%map(3,n)
+
+            !             ! No penetration
+            !             this%V(i,j,k)=0.0_WP
+
+            !             ! No slip
+            !             this%U(i:i+1,j+stag,k) = &
+            !                -this%U(i:i+1,j-my_bc%dir+stag,k)
+
+            !             this%W(i,j+stag,k:k+1) = &
+            !                -this%W(i,j-my_bc%dir+stag,k:k+1)
+            !       end do
+
+            !       case ('z')
+            !          do n=1,my_bc%itr%n_
+            !             i=my_bc%itr%map(1,n)
+            !             j=my_bc%itr%map(2,n)
+            !             k=my_bc%itr%map(3,n)
+
+            !             ! No penetration
+            !             this%W(i,j,k)=0.0_WP
+
+            !             ! No slip
+            !             this%U(i:i+1,j,k+stag) = &
+            !                -this%U(i:i+1,j,k-my_bc%dir+stag)
+
+            !             this%V(i,j:j+1,k+stag) = &
+            !                -this%V(i,j:j+1,k-my_bc%dir+stag)
+            !          end do
+            !    end select
             case default
                call die('[tpns apply_bcond] Unknown bcond type')
             end select

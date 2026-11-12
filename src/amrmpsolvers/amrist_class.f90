@@ -75,6 +75,9 @@ module amrist_class
         procedure, private :: update_surface_tension_stresses_pressure 
         procedure, private :: update_surface_tension_forces_pressure 
         procedure, private :: apply_surface_tension
+        ! Face Paraboloid Formulation 
+        procedure, private :: update_surface_tension_stresses_paraboloid
+        procedure, private :: update_surface_tension_forces_paraboloid 
         ! procedure, private :: apply_pressure_fluxes
         ! Ellipsoid Exact Values
         procedure, private :: update_surface_tension_stresses_ellipsoid
@@ -1195,6 +1198,424 @@ contains
         ! print *, "END update_surface_tension_forces"       
     end subroutine update_surface_tension_forces_pressure
 
+    ! ============================================================================
+    ! FACE PARABOLOID METHODS
+    ! ============================================================================
+    subroutine update_surface_tension_stresses_paraboloid(this)
+        use irl_fortran_interface
+        use f_PUNeigh_RectCub_class
+        use amrpic_class, only: is_full,is_empty,cut_rectcub_pic,pic_container
+        class(amrist), intent(inout) :: this
+        type(PUST_RectCub_type) :: solver
+        real(WP) :: dx,dy,dz
+        integer :: lvl,i,j,k 
+        integer :: i_in,j_in, k_in 
+        integer :: shift_first_index,shift_second_index
+        integer, dimension(1:3) :: shift_index_normal,shift_index_momentum,index
+        real(WP), dimension(1:3) :: dvec,shift,face_normal
+        real(WP), dimension(1:3) :: pressure_cell_center,velocity_cell_center,face_center 
+        real(WP), dimension(1:3) :: force
+        real(WP), dimension(1:3) :: P0,P1,P2,P3 
+        type(PUNeigh_RectCub_type) :: neighborhood
+        type(amrex_box) :: bx
+        type(amrex_mfiter) :: mfi
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pPLIC
+        ! Jibben Stuff
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+        integer :: ind, ii,jj,kk, icenter
+        integer, dimension(1:3) :: lower,upper 
+        real(WP), dimension(1:3) :: datum, normal, quarter_size
+        real(WP), dimension(3) :: lo,hi
+        real(WP) :: vf_sample,count,normal_mag,liquid_in_cell,cell_volume_total,vf_cell
+        type(pic_container), dimension(:,:,:,:), contiguous, pointer :: pPIC
+        type(pic_container) :: interface_component 
+        type(SeparatorVariant_type) :: interface_component_variant
+        type(JibbenNeigh_type) :: neighborhood
+        type(RectCub_type) :: cell
+        type(PlanarSep_type) :: planar_sep
+        type(Poly_type) :: polygon
+        logical :: found_center
+        real(WP) :: cell_volume
+        real(WP) :: liquid_volume
+        real(WP) :: gas_volume
+        real(WP) :: liquid_fraction
+        real(WP) :: gas_fraction
+        ! print *, "START update_surface_tension_stresses"
+        lvl = this%fsvf%amr%maxlvl 
+        dx = this%fsvf%amr%dx(lvl)
+        dy = this%fsvf%amr%dy(lvl)
+        dz = this%fsvf%amr%dz(lvl)
+        dvec = (/dx,dy,dz/)
+        shift = dvec
+        ! Create Neighborhood and Solver
+        call new(neighborhood) 
+        call new(solver)
+        
+        ! Create Jibben Neighborhoods
+        call new(cell) 
+        call new(polygon)
+        call new(planar_sep)
+        call new(jibben_neighborhood)
+        call reserve(jibben_neighborhood,48)
+        ! Iterate Over Domain at Finest lvl 
+        call this%fsvf%amr%mfiter_build(lvl,mfi)
+        do while (mfi%next())
+            ! print *,"GETTING POINTERS"
+            pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
+            ! Get pointer to PLIC data
+            pVF=>this%VF%mf(lvl)%dataptr(mfi)
+            pPLIC=>this%PLIC%dataptr(mfi)
+            pPIC=>this%PIC%dataptr(mfi)
+
+            bx = mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                pSigma_x(i,j,k,1) = 0.0_WP
+                pSigma_y(i,j,k,2) = 0.0_WP
+                pSigma_z(i,j,k,3) = 0.0_WP
+
+                pSigma_x(i,j,k,1) = 0.0_WP
+                pSigma_y(i,j,k,2) = 0.0_WP
+                pSigma_z(i,j,k,3) = 0.0_WP
+
+                pSigma_x(i,j,k,1) = 0.0_WP
+                pSigma_y(i,j,k,2) = 0.0_WP
+                pSigma_z(i,j,k,3) = 0.0_WP
+                ! Get Stresses 
+                pressure_cell_center = (/this%fsvf%amr%xlo+real(i  ,WP)*dx,this%fsvf%amr%ylo+real(j  ,WP)*dy,this%fsvf%amr%zlo+real(k  ,WP)*dz/)
+                pressure_cell_center = pressure_cell_center + dvec/2
+                do i_in = 1,3 
+                    ! Set up shift to velocity cell
+                    shift = (/0.0_WP,0.0_WP,0.0_WP/)  
+                    shift(i_in) = dvec(i_in)/2
+                    shift_index_momentum = (/0,0,0/)
+                    shift_index_momentum(i_in) = 1
+                    ! Move center to velocity cell we are looking at
+                    velocity_cell_center = pressure_cell_center - shift
+                    do j_in = 1,3 
+                        force = (/0.0_WP,0.0_WP,0.0_WP/)
+                        ! Shift from velocity cell center ot the face center we are looking at:
+                        shift = (/0.0_WP,0.0_WP,0.0_WP/)  
+                        shift(j_in) = dvec(j_in)/2
+                        shift_index_normal = (/0,0,0/)
+                        shift_index_normal(j_in) = 1
+                        face_normal = (/0.0_WP,0.0_WP,0.0_WP/)
+                        face_normal(j_in) = 1.0_WP
+                        face_center = velocity_cell_center + shift
+                        ! Now that we have the face center and normal direction (all positive normals)
+                        ! we can use the pattern below to get a CCW orientation:
+                        ! -- =>  +- => ++ => -+
+                        ! The directions we apply this two are the directions perpendicular to our normal, in CCW order. This is to say if our directional order is:
+                        ! (x,y,z) then we use  (y,z) for x normal, (z,x) for y normal, and (x,y) for z normal
+                        ! This is where we define those directions, in indices
+                        shift_first_index = mod(j_in,3)+1
+                        shift_second_index = mod(j_in+1,3)+1
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = -shift(shift_first_index)
+                        shift(shift_second_index) = -shift(shift_second_index)
+                        P0 = face_center + shift
+
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = shift(shift_first_index)
+                        shift(shift_second_index) = -shift(shift_second_index)
+                        P1 = face_center + shift
+
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = shift(shift_first_index)
+                        shift(shift_second_index) = shift(shift_second_index)
+                        P2 = face_center + shift
+
+                        ! Apply to get first corner
+                        shift = dvec/2     
+                        shift(j_in) = 0.0_WP
+                        shift(shift_first_index) = -shift(shift_first_index)
+                        shift(shift_second_index) = shift(shift_second_index)
+                        P3 = face_center + shift
+
+                        ! Jibben Stuff
+                        call setSize(jibben_neighborhood,0)
+                        ind = 0 
+                        found_center = .false. 
+                        ! Add Polygons to neighbhorhood
+                        lower = (/i-1, j-1, k-1/)
+                        upper = (/i+1, j+1, k+1/)
+                        if (i_in.ne.j_in) then
+                            lower(i_in) = lower(i_in) - 1
+                            upper(j_in) = upper(j_in) + 1
+                        endif
+                        do kk=lower(3),uper(3); do jj = lower(2),upper(2); do ii = lower(1),upper(1)
+                            ! Skip cells with no interface
+                            if(is_full(pPLIC(ii,jj,kk,:)) .or. is_empty(pPLIC(ii,jj,kk,:))) cycle 
+                            ! add polygon to neighborhood
+                            call setNumberOfPlanes(planar_sep,1)
+                            call setPlane(planar_sep,0,pPLIC(ii,jj,kk,1:3),pPLIC(ii,jj,kk,4))
+                            lo=[this%fsvf%amr%xlo+real(ii  ,WP)*dx,this%fsvf%amr%ylo+real(jj  ,WP)*dy,thisfsvf%%amr%zlo+real(kk  ,WP)*dz]
+                            hi=[this%fsvf%amr%xlo+real(ii+1,WP)*dx,this%fsvf%amr%ylo+real(jj+1,WP)*dy,thisfsvf%%amr%zlo+real(kk+1,WP)*dz]
+                            call construct_2pt(cell,lo,hi)
+                            call getPoly(cell, planar_sep,0,polygon)
+                            if (getNumberOfVertices(polygon).ge.3) then
+                                call addMember(neighborhood,polygon,1.0_WP)
+                                ! Trap and set stencil center
+                                if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
+                                    icenter=ind
+                                    found_center=.true.
+                                    call setCenterOfStencil(neighborhood,icenter)
+                                end if
+                                ! Increment counter
+                                ind=ind+1
+                            end if
+                        enddo; enddo; enddo
+                        ! Get Datum and Normal
+                        datum = face_center 
+                        normal = (/0.0_WP,0.0_WP,0.0_WP/)
+                        found_interface = .false.
+                        count = 0.0_WP
+                        liquid_in_cell = 0.0_WP 
+                        cell_volume = 0.0_WP 
+                        vf_cell = 0.0_WP
+                        cell_volume_total = 0.0_WP
+                        ! Create a cell centered at the face Center
+                        if(i_in .eq. j_in) then 
+                            index =(/i,j,k/)
+                            vf_sample = pVF(i,j,k,1)
+                            vf_cell = vf_sample 
+                            if(vf_sample .gt. 1e-12 .and. vf_sample .lt. 1.0_WP - 1e-12) then 
+                                normal = pPLIC(i,j,k,1:3)
+                                found_interface = .true. 
+                            endif
+                        else
+                            ! ========================== First Pressure Cell
+                            index = (/i,j,k/)
+                            vf_sample = pVF(index(1),index(2),index(3))
+                            ! Construct quarter cell
+                            ! Shift to quarter cell center
+                            shift = 0.0_WP
+                            shift(i_in) = 0.25_WP*dvec(i_in)
+                            shift(j_in) = -0.25_WP*dvec(j_in)
+                            ! Cell Size
+                            quarter_size = dvec
+                            quarter_size(i_in) = 0.5_WP*dvec(i_in)
+                            quarter_size(j_in) = 0.5_WP*dvec(j_in)
+                            ! Construct
+                            call construct_2pt(cell, &
+                                face_center + shift - 0.5_WP*quarter_size, &
+                                face_center + shift + 0.5_WP*quarter_size)
+                
+                            lo = face_center + shift - 0.5_WP*quarter_size
+                            hi = face_center + shift + 0.5_WP*quarter_size
+                            ! Calculate total quarter-cell volume
+                            cell_volume = calculateVolume(cell)
+                            cell_volume_total = cell_volume_total + cell_volume
+                            
+                            ! VF work
+                            if (vf_sample .ge. 1.0_WP - 1e-12_WP) then
+                                ! Full liquid cell
+                                liquid_in_cell = liquid_in_cell + cell_volume
+                            else if (vf_sample .gt. 1e-12_WP) then
+                                ! Mixed cell
+                                normal = normal + pPLIC(index(1),index(2),index(3),1:3)
+                                call cut_rectcub_pic(lo,hi,pPIC(index(1),index(2),index(3),1),liquid_volume)
+                                liquid_in_cell = liquid_in_cell + liquid_volume
+                                found_interface = .true.
+                            endif
+                            ! ========================== Second Pressure Cell
+                            index = (/i,j,k/)
+                            index = index+shift_index_normal
+                            vf_sample = this%VF%vf(index(1),index(2),index(3))
+                            ! Construct quarter cell
+                            ! Shift to quarter cell center
+                            shift = 0.0_WP
+                            shift(i_in) = 0.25_WP*dvec(i_in)
+                            shift(j_in) = 0.25_WP*dvec(j_in)
+                            ! Cell Size
+                            quarter_size = dvec
+                            quarter_size(i_in) = 0.5_WP*dvec(i_in)
+                            quarter_size(j_in) = 0.5_WP*dvec(j_in)
+                            ! Construct
+                            call construct_2pt(cell, &
+                                face_center + shift - 0.5_WP*quarter_size, &
+                                face_center + shift + 0.5_WP*quarter_size)
+                
+                            lo = face_center + shift - 0.5_WP*quarter_size
+                            hi = face_center + shift + 0.5_WP*quarter_size
+                            ! Calculate total quarter-cell volume
+                            cell_volume = calculateVolume(cell)
+                            cell_volume_total = cell_volume_total + cell_volume
+                            
+                            ! VF work
+                            if (vf_sample .ge. 1.0_WP - 1e-12_WP) then
+                                ! Full liquid cell
+                                liquid_in_cell = liquid_in_cell + cell_volume
+                            else if (vf_sample .gt. 1e-12_WP) then
+                                ! Mixed cell
+                                normal = normal + pPLIC(index(1),index(2),index(3),1:3)
+                                call cut_rectcub_pic(lo,hi,pPIC(index(1),index(2),index(3),1),liquid_volume)
+                                liquid_in_cell = liquid_in_cell + liquid_volume
+                                found_interface = .true.
+                            endif
+                            ! ========================== Third Pressure Cell
+                            index = (/i,j,k/)
+                            index = index + shift_index_normal - shift_index_momentum 
+                            vf_sample = this%VF%vf(index(1),index(2),index(3))
+                            ! Construct quarter cell
+                            ! Shift to quarter cell center
+                            shift = 0.0_WP
+                            shift(i_in) = -0.25_WP*dvec(i_in)
+                            shift(j_in) = 0.25_WP*dvec(j_in)
+                            ! Cell Size
+                            quarter_size = dvec
+                            quarter_size(i_in) = 0.5_WP*dvec(i_in)
+                            quarter_size(j_in) = 0.5_WP*dvec(j_in)
+                            ! Construct
+                            call construct_2pt(cell, &
+                                face_center + shift - 0.5_WP*quarter_size, &
+                                face_center + shift + 0.5_WP*quarter_size)
+                
+                            lo = face_center + shift - 0.5_WP*quarter_size
+                            hi = face_center + shift + 0.5_WP*quarter_size
+                            ! Calculate total quarter-cell volume
+                            cell_volume = calculateVolume(cell)
+                            cell_volume_total = cell_volume_total + cell_volume
+                            
+                            ! VF work
+                            if (vf_sample .ge. 1.0_WP - 1e-12_WP) then
+                                ! Full liquid cell
+                                liquid_in_cell = liquid_in_cell + cell_volume
+                            else if (vf_sample .gt. 1e-12_WP) then
+                                ! Mixed cell
+                                normal = normal + pPLIC(index(1),index(2),index(3),1:3)
+                                call cut_rectcub_pic(lo,hi,pPIC(index(1),index(2),index(3),1),liquid_volume)
+                                liquid_in_cell = liquid_in_cell + liquid_volume
+                                found_interface = .true.
+                            endif
+                            ! ========================== Fourth Pressure Cell
+                            index = (/i,j,k/)
+                            index = index - shift_index_momentum 
+                            vf_sample = this%VF%vf(index(1),index(2),index(3))
+                            ! Construct quarter cell
+                            ! Shift to quarter cell center
+                            shift = 0.0_WP
+                            shift(i_in) = -0.25_WP*dvec(i_in)
+                            shift(j_in) = -0.25_WP*dvec(j_in)
+                            ! Cell Size
+                            quarter_size = dvec
+                            quarter_size(i_in) = 0.5_WP*dvec(i_in)
+                            quarter_size(j_in) = 0.5_WP*dvec(j_in)
+                            ! Construct
+                            call construct_2pt(cell, &
+                                face_center + shift - 0.5_WP*quarter_size, &
+                                face_center + shift + 0.5_WP*quarter_size)
+                
+                            lo = face_center + shift - 0.5_WP*quarter_size
+                            hi = face_center + shift + 0.5_WP*quarter_size
+                            ! Calculate total quarter-cell volume
+                            cell_volume = calculateVolume(cell)
+                            cell_volume_total = cell_volume_total + cell_volume
+                            
+                            ! VF work
+                            if (vf_sample .ge. 1.0_WP - 1e-12_WP) then
+                                ! Full liquid cell
+                                liquid_in_cell = liquid_in_cell + cell_volume
+                            else if (vf_sample .gt. 1e-12_WP) then
+                                ! Mixed cell
+                                normal = normal + pPLIC(index(1),index(2),index(3),1:3)
+                                call cut_rectcub_pic(lo,hi,pPIC(index(1),index(2),index(3),1),liquid_volume)
+                                liquid_in_cell = liquid_in_cell + liquid_volume
+                                found_interface = .true.
+                            endif
+
+                            ! Compute VF
+                            if (cell_volume_total .gt. 0.0_WP) then
+                                vf_cell = liquid_in_cell / cell_volume_total
+                            else
+                                vf_cell = 0.0_WP
+                            endif
+                        endif
+                        vf_cell = min(vf_cell,1.0_WP)
+                        vf_cell = max(vf_cell,0.0_WP)
+
+                        if(found_interface) then 
+                            normal_mag = sqrt(sum(normal**2))
+                            if(normal_mag .gt. 1e-12) then 
+                                normal = normal/normal_mag 
+                            endif
+                        else
+                            normal = (/0.0_WP,0.0_WP,0.0_WP/)
+                        endif
+
+                        ! Build Jibben Interface
+                        force = (/0.0_WP,0.0_WP,0.0_WP/)
+                        if (found_interface) then 
+                            ! Localize Jibben Neighborhood
+                            call setDelta(jibben_neighborhood,2.5_WP*(dx+dy+dz)/3.0_WP)
+                            call localize(jibben_neighborhood,datum,normal)
+
+                            call reconstructJibben3D(neighborhood,interface_component)
+                            ! Make cell
+                            call construct_2pt(cell, &
+                                face_center - 0.5_WP*dvec, &
+                                face_center + 0.5_WP*dvec)
+                            SELECT CASE(this%MatchingOption)
+                                CASE(2)
+                                    ! print *,"MATCHING"
+                                    call matchVolumeFraction(cell,vf_cell,interface_component) 
+                                CASE DEFAULT
+                                    ! print *,"NOT MATCHING"
+                            END SELECT
+                            call new(interface_component_variant,interface_component)
+                            call emptyNeighborhood(jibben_neighborhood)
+                            call solveFaceParaboloid(solver,this%fs%sigma,P0,P1,P2,P3, interface_component,this%PressureOption,this%MarangoniOption,force)
+                        endif
+                        ! Now that we have the face corners, run the code and get the force
+                        ! if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+                        ! print *, "Marangoni Option:",this%MarangoniOption
+                        
+                        
+                        ! Now that we have the force, store it properly 
+                        if(i_in .eq. 1) then 
+                            pSigma_x(i,j,k,j_in) = force(i_in) 
+                        elseif(i_in .eq. 2) then 
+                            pSigma_y(i,j,k,j_in) = force(i_in) 
+                        elseif (i_in .eq. 3) then 
+                            pSigma_z(i,j,k,j_in) = force(i_in) 
+                        endif 
+
+                        ! print *, "==================================="
+                        ! print *, "i_in,j_in: ",i_in,j_in
+                        ! print *, "pressure_cell_center: ", pressure_cell_center
+                        ! print *, "velocity_cell_center: ", velocity_cell_center
+                        ! print *, "face_center: ", face_center 
+                        ! print *, "shift_first_index: ", shift_first_index 
+                        ! print *, "shift_second_index: ", shift_second_index 
+                        ! print *, "P0: ", P0
+                        ! print *, "P1: ", P1
+                        ! print *, "P2: ", P2
+                        ! print *, "P3: ", P3
+                        ! write(*,'(A)', advance='no') "For Desmos: [("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='no') P0(shift_first_index), ",", P0(shift_second_index), "),("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='no') P1(shift_first_index), ",", P1(shift_second_index), "),("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='no') P2(shift_first_index), ",", P2(shift_second_index), "),("
+                        ! write(*,'(F10.5, A, F10.5, A)', advance='yes') P3(shift_first_index), ",", P3(shift_second_index), ")]"
+                        ! print *, "==================================="
+                    enddo
+                enddo
+                ! print *, "OUT STRESS LOOP"
+            end do; end do; end do
+            ! print *,"OUT BOX LOOP"
+        enddo 
+        call this%ST_x_stresses%sync_lvl(lvl)
+        call this%ST_y_stresses%sync_lvl(lvl)
+        call this%ST_z_stresses%sync_lvl(lvl)
+        ! print *, "OUT MFI LOOP"
+    end subroutine update_surface_tension_stresses_paraboloid 
 
     ! ============================================================================
     ! ELLIPSOID METHODS

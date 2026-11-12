@@ -855,13 +855,24 @@ contains
    
    !> Calculate the new VF based on U/V/W and dt
    subroutine advance(this,dt,U,V,W)
+      use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
       implicit none
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: V     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: W     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
-      
+      type(RectCub_type) :: check_cell
+      type(SepVM_type)  :: check_moments
+
+      integer :: i,j,k
+      integer :: mismatch_count
+
+      real(WP) :: vf_expected, vf_reconstructed
+      real(WP) :: vf_error, liquid_volume, cell_volume
+
+      real(WP), parameter :: vf_tol = 1e-8_WP
+
       ! First perform transport
       select case (this%transport_method)
       case (flux)
@@ -908,6 +919,65 @@ contains
       ! Perform PPIC reconstruction
       if (this%ppic) call this%build_quadratic_interface()
       
+      ! Check all Interfaces
+      call new(check_cell)
+      call new(check_moments)
+
+      ! ============================================================
+      ! CHECK ALL RECONSTRUCTED INTERFACES
+      ! ============================================================
+
+      mismatch_count = 0
+
+      do k=this%cfg%kmin_,this%cfg%kmax_
+         do j=this%cfg%jmin_,this%cfg%jmax_
+            do i=this%cfg%imin_,this%cfg%imax_
+
+               vf_expected = this%VF(i,j,k)
+
+               ! Only check mixed cells
+               if (vf_expected.le.1e-12_WP .or. &
+                  vf_expected.ge.1.0_WP-1e-12_WP) cycle
+
+               ! Construct the full pressure cell
+               call construct_2pt(check_cell, &
+                  [this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)], &
+                  [this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+
+               ! Calculate liquid volume from reconstructed interface
+               call getNormMoments(check_cell, &
+                  this%liquid_gas_interface(i,j,k),check_moments)
+
+               liquid_volume = getVolume(check_moments,0)
+               cell_volume   = calculateVolume(check_cell)
+
+               vf_reconstructed = liquid_volume/cell_volume
+
+               ! Compare reconstructed VF against stored VF
+               vf_error = abs(vf_reconstructed-vf_expected)
+
+               if (.not.ieee_is_finite(vf_error) .or. vf_error.gt.vf_tol) then
+
+                  mismatch_count = mismatch_count + 1
+
+                  print *, "=========================================="
+                  print *, "WARNING: INTERFACE VF MISMATCH"
+                  print *, "Cell (i,j,k): ",i,j,k
+                  print *, "Expected VF:      ",vf_expected
+                  print *, "Reconstructed VF: ",vf_reconstructed
+                  print *, "Absolute Error:   ",vf_error
+                  print *, "=========================================="
+
+               endif
+
+            enddo
+         enddo
+      enddo
+
+      if (mismatch_count.gt.0) then
+         print *, "TOTAL LOCAL INTERFACE VF MISMATCHES:",mismatch_count
+         STOP
+      endif
       ! Reset moments to guarantee compatibility with interface reconstruction
       call this%reset_volume_moments()
       
@@ -4117,6 +4187,8 @@ contains
 
                   if (normal_metric.gt.0.15_WP) then
                      this%interface_type(i, j, k) = 1.0_WP
+                     ! Clean up neighborhood
+                     call emptyNeighborhood(neighborhood)
                      cycle
                   end if
    
