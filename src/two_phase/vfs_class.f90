@@ -33,12 +33,12 @@ module vfs_class
    integer, parameter, public :: jibben=10           !< PPIC-Jibben
    integer, parameter, public :: jibbenPU=11         !< PPIC-Jibben and PU hybrid
    integer, parameter, public :: jibbenSq=12         !< PPIC-Jibben squared volume
-   integer, parameter, public :: PUppic=13           !< PU-PPIC
+   integer, parameter, public :: pu_vf=13           !< PU-PPIC with VF
    integer, parameter, public :: PUplic=14           !< PU-PLIC
    integer, parameter, public :: jibbenPLIC=15       !< Jibben-PLIC
    integer, parameter, public :: cf=16               !< Circle fit
    integer, parameter, public :: pucf=17               !< Circle fit
-   integer, parameter, public :: PUppic_hf=18           !< PU-PPIC
+   integer, parameter, public :: pu_h2f=18           !< PU-PPIC with H2F
    
    ! List of available interface transport schemes for VF
    integer, parameter, public :: flux=1             !< Flux-based geometric transport
@@ -232,8 +232,8 @@ module vfs_class
       procedure :: build_jibbenPLIC                       !< PPIC-Jibben and PLIC reconstruction of the interface
       procedure :: build_jibbenPU                         !< PPIC-Jibben and PU hybrid reconstruction of the interface
       procedure :: build_jibbenSq                         !< PPIC-Jibben squared volume reconstruction of the interface
-      procedure :: build_PUppic                           !< PU-PPIC reconstruction of the interface
-      procedure :: build_PUppic_hf                       !< PU-PPIC reconstruction of the interface using hf
+      procedure :: build_pu_vf                           !< PU-PPIC reconstruction of the interface
+      procedure :: build_pu_h2f                        !< PU-PPIC reconstruction of the interface using h2f
       procedure :: build_PUplic                           !< PU-PLIC reconstruction of the interface
       procedure :: build_cf                               !< Circle fit reconstruction of the interface
       procedure :: build_pucf                               !< Circle fit reconstruction of the interface
@@ -364,7 +364,7 @@ contains
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
          this%ppic=.true.
-      case (PUppic)
+      case (pu_vf)
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
          this%ppic=.true.
@@ -380,7 +380,7 @@ contains
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
          this%ppic=.true.
-      case (PUppic_hf)
+      case (pu_h2f)
          this%reconstruction_method=reconstruction_method
          this%two_planes=.false.
          this%ppic=.true.
@@ -2549,13 +2549,12 @@ contains
       case (youngs) ; call this%build_youngs()
       case (plicnet); call this%build_plicnet()
       case (r2pnet) ; call this%build_r2pnet()
-      case (jibben) ; call this%build_lvira()
+      case (jibben) ; call this%build_plicnet()
       case (jibbenPLIC) ; call this%build_plicnet()
       case (jibbenPU) ; call this%build_plicnet()
-      ! case (jibbenPU) ; call this%build_plicnet()
       case (jibbenSq) ; call this%build_lvira()
-      case (PUppic)   ; call this%build_lvira()
-      case (PUppic_hf)   ; call this%build_lvira()
+      case (pu_vf)   ; call this%build_plicnet()
+      case (pu_h2f)   ; call this%build_plicnet()
       case (PUplic)   ; call this%build_lvira()
       case (cf)       ; call this%build_plicnet()
       case (pucf)       ; call this%build_lvira()
@@ -2576,8 +2575,8 @@ contains
       case (jibbenPLIC) ; call this%build_jibbenPLIC()
       case (jibbenPU) ; call this%build_jibbenPU()
       case (jibbenSq) ; call this%build_jibbenSq()
-      case (PUppic)   ; call this%build_PUppic()
-      case (PUppic_hf)   ; call this%build_PUppic_hf()
+      case (pu_vf)   ; call this%build_pu_vf()
+      case (pu_h2f)   ; call this%build_pu_h2f()
       case (PUplic)   ; call this%build_PUplic()
       case (cf)       ; call this%build_cf()
       case (pucf)       ; call this%build_pucf()
@@ -4056,93 +4055,6 @@ contains
 
    end subroutine build_jibbenPLIC
 
-   ! subroutine build_jibbenPLIC(this)
-   !    use mathtools, only: normalize
-   !    implicit none
-   !    class(vfs), intent(inout) :: this
-   !    integer(IRL_SignedIndex_t) :: i,j,k
-   !    integer :: ind,ii,jj,kk,icenter
-   !    type(JibbenNeigh_type) :: neighborhood
-   !    type(RectCub_type) :: cell
-   !    logical :: found_center
-   !    real(IRL_double) :: squaredVolError
-      
-   !    ! Storage for a cell
-   !    call new(cell)
-
-   !    ! Give ourselves an Jibben neighborhood and reserve 27 cells
-   !    call new(neighborhood)
-   !    call reserve(neighborhood, 27)
-      
-   !    ! Traverse domain and reconstruct interface
-   !    do k=this%cfg%kmin_,this%cfg%kmax_
-   !       do j=this%cfg%jmin_,this%cfg%jmax_
-   !          do i=this%cfg%imin_,this%cfg%imax_
-               
-   !             ! Skip wall/bcond cells - bconds need to be provided elsewhere directly!
-   !             if (this%mask(i,j,k).ne.0) cycle
-               
-   !             ! Handle full cells differently
-   !             if (this%VF(i,j,k).lt.VFlo.or.this%VF(i,j,k).gt.VFhi) then
-   !                call setNumberOfPlanes(this%liquid_gas_interface(i,j,k),1)
-   !                call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
-   !                cycle
-   !             end if
-               
-   !             ! Add polygons to neighborhood
-   !             call setSize(neighborhood, 0)
-   !             ind=0
-   !             found_center=.false.
-   !             do kk=k-1,k+1
-   !                do jj=j-1,j+1
-   !                   do ii=i-1,i+1
-   !                      ! Add cell to neighborhood
-   !                      if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
-   !                         call addMember(neighborhood,this%interface_polygon(1,ii,jj,kk),1.0_WP)
-   !                         ! Trap and set stencil center
-   !                         if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
-   !                            icenter=ind
-   !                            found_center=.true.
-   !                            call setCenterOfStencil(neighborhood,icenter)
-   !                         end if
-   !                         ! Increment counter
-   !                         ind=ind+1
-   !                      end if
-   !                   end do
-   !                end do
-   !             end do
-   !             if (ind.gt.0.and.found_center) then
-   !                ! Localize jibben neighborhood
-   !                call setDelta(neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
-   !                call localize(neighborhood)
-
-   !                ! squared volume error
-   !                squaredVolError = volumeErrorSquaredWithJibben3D(neighborhood, this%cfg%dx(i))
-
-   !                if (squaredVolError.gt.0.05_WP) then
-   !                this%interface_type(i, j, k) = 1.0_WP
-   !                   cycle
-   !                end if
-   
-   !                ! Perform the reconstruction
-   !                call reconstructJibbenSq3D(neighborhood,this%liquid_gas_interface(i,j,k))
-                  
-   !                ! Match Jibben parbolic reconstruction to volume fraction
-   !                call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
-   !                call matchVolumeFraction(cell,this%VF(i,j,k),this%liquid_gas_interface(i,j,k))
-
-   !                ! Clean up neighborhood
-   !                call emptyNeighborhood(neighborhood)
-   !             end if
-   !          end do
-   !       end do
-   !    end do
-      
-   !    ! Synchronize across boundaries
-   !    call this%sync_interface()
-      
-   ! end subroutine build_jibbenPLIC
-
    !> Jibben squared volume reconstruction of a parabolic interface in mixed cells
    subroutine build_jibbenSq(this)
       use mathtools, only: normalize
@@ -4517,7 +4429,7 @@ contains
       
    end subroutine build_jibbenPU
 
-   subroutine build_PUppic(this)
+   subroutine build_pu_vf(this)
       use mathtools, only: normalize,Pi
       use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
       implicit none
@@ -4535,7 +4447,7 @@ contains
       logical, dimension(:,:,:), allocatable :: is_underresolved
       real(IRL_DOUBLE), dimension(2) :: principal_curvatures
       real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac
-      real(IRL_double) :: vf_supercell, normal_metric, squaredVolError
+      real(IRL_double) :: vf_supercell, normal_metric, squaredVolError, volError
       real(IRL_double) :: fitted_alignment, cos_neighbor_angle, cos_fitted_angle, normal_weight
       real(IRL_double), dimension(3) :: normal, centroid, center_normal, averaged_normal
       real(IRL_double), dimension(14) :: paraboloid_data
@@ -4649,8 +4561,8 @@ contains
                         fitted_alignment.ge.cos_fitted_angle) well_resolved=.true.
                   end if
 
-                  squaredVolError = volumeErrorWithJibben3D(jibben_neighborhood, this%cfg%meshsize(i,j,k))
-                  if (squaredVolError.gt.0.05_WP) then
+                  volError = volumeErrorWithJibben3D(jibben_neighborhood, this%cfg%meshsize(i,j,k))
+                  if (volError.gt.0.05_WP) then
                      well_resolved=.false.
                      is_underresolved(i,j,k)=.true.
                      call emptyNeighborhood(jibben_neighborhood)
@@ -4850,9 +4762,9 @@ contains
       ! Synchronize across boundaries
       call this%sync_interface()
       
-   end subroutine build_PUppic
+   end subroutine build_pu_vf
 
-   subroutine build_PUppic_hf(this)
+   subroutine build_pu_h2f(this)
       use mathtools, only: normalize,Pi
       use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
       implicit none
@@ -5185,7 +5097,7 @@ contains
       ! Synchronize across boundaries
       call this%sync_interface()
       
-   end subroutine build_PUppic_hf
+   end subroutine build_pu_h2f
 
    !> PU reconstruction using plic as local approximant
    subroutine build_PUplic(this)
