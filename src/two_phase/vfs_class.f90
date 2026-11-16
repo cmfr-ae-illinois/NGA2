@@ -4434,9 +4434,10 @@ contains
       use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
       implicit none
       class(vfs), intent(inout) :: this
-      integer(IRL_SignedIndex_t) :: i,j,k
+      integer(IRL_SignedIndex_t) :: i,j,k,fit_rank
       integer :: ind,ii,jj,kk,icenter,aligned_count
       integer, parameter :: min_aligned_neighbors=6
+      real(IRL_double), parameter :: datum_limit=2.0_WP, volume_tolerance=1.0e-14_WP
       type(JibbenNeigh_type) :: jibben_neighborhood
       type(PUNeigh_RectCub_type) :: pu_neighborhood
       type(RectCub_type) :: cell
@@ -4446,7 +4447,8 @@ contains
       integer(IRL_LargeOffsetIndex_t) :: total_cells
       logical, dimension(:,:,:), allocatable :: is_underresolved
       real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac
+      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, distance_to_datum
+      real(IRL_double), dimension(3) :: cell_center
       real(IRL_double) :: vf_supercell, normal_metric, squaredVolError, volError
       real(IRL_double) :: fitted_alignment, cos_neighbor_angle, cos_fitted_angle, normal_weight
       real(IRL_double), dimension(3) :: normal, centroid, center_normal, averaged_normal
@@ -4503,7 +4505,10 @@ contains
                   call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
                   cycle
                end if
-               if (getNumberOfVertices(this%interface_polygon(1,i,j,k)).le.2) cycle
+               if (getNumberOfVertices(this%interface_polygon(1,i,j,k)).le.2) then
+                  is_underresolved(i,j,k)=.true.
+                  cycle
+               end if
 
                ! Filling up jibben neighborhood
                call setSize(jibben_neighborhood, 0)
@@ -4516,7 +4521,10 @@ contains
                   do jj=j-1,j+1
                      do ii=i-1,i+1
                         ! Add cell to neighborhood
-                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.2) then
+                           area_weight=abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))
+                           if (.not.ieee_is_finite(area_weight)) cycle
+                           if (area_weight.le.epsilon(1.0_WP)) cycle
                            normal=calculateNormal(this%interface_polygon(1,ii,jj,kk))
                            if (dot_product(normal,center_normal).ge.cos_neighbor_angle) &
                               aligned_count=aligned_count+1
@@ -4541,28 +4549,33 @@ contains
                      end do
                   end do
                end do
+               if (.not.found_center.or.ind.lt.2) then
+                  is_underresolved(i,j,k)=.true.
+                  call emptyNeighborhood(jibben_neighborhood)
+                  cycle ! retain PLIC
+               end if
                if (ind.gt.0.and.found_center) then
                   ! Localize jibben neighborhood
                   call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
                   call localize(jibben_neighborhood)
 
-                  ! neighbor count check
-                  if (ind.lt.2) then
+                  call reconstructJibben3D(jibben_neighborhood,jibbeninterface(i,j,k),fit_rank)
+                  if (fit_rank.ne.6) then
                      is_underresolved(i,j,k)=.true.
                      call emptyNeighborhood(jibben_neighborhood)
-                     cycle ! use plic
+                     cycle ! retain PLIC
                   end if
 
                   well_resolved=.false.
                   if (aligned_count.ge.min_aligned_neighbors) then
                      averaged_normal=globalAveragedNormalWithJibben3D(jibben_neighborhood)
                      fitted_alignment=dot_product(averaged_normal,center_normal)
-                     if (fitted_alignment.eq.fitted_alignment.and. &
+                     if (ieee_is_finite(fitted_alignment).and. &
                         fitted_alignment.ge.cos_fitted_angle) well_resolved=.true.
                   end if
 
                   volError = volumeErrorWithJibben3D(jibben_neighborhood, this%cfg%meshsize(i,j,k))
-                  if (volError.gt.0.05_WP) then
+                  if (.not.ieee_is_finite(volError).or.volError.gt.0.05_WP) then
                      well_resolved=.false.
                      is_underresolved(i,j,k)=.true.
                      call emptyNeighborhood(jibben_neighborhood)
@@ -4579,7 +4592,7 @@ contains
 
                      ! checking normal scatter metric
                      normal_metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
-                     if (normal_metric.gt.0.10_WP) then
+                     if (.not.ieee_is_finite(normal_metric).or.normal_metric.gt.0.10_WP) then
                         is_underresolved(i,j,k)=.true.
                         call emptyNeighborhood(jibben_neighborhood)
                         cycle ! use plic
@@ -4587,19 +4600,36 @@ contains
 
                      ! squared volume error
                      squaredVolError = volumeErrorSquaredWithJibben3D(jibben_neighborhood, this%cfg%meshsize(i,j,k))
-                     if (squaredVolError.gt.0.05_WP) then
+                     if (.not.ieee_is_finite(squaredVolError).or.squaredVolError.gt.0.05_WP) then
                         is_underresolved(i,j,k)=.true.
                         call emptyNeighborhood(jibben_neighborhood)
                         cycle ! use plic
                      end if
                   end if
    
-                  ! Jibben squared volume reconstruction
-                  call reconstructJibben3D(jibben_neighborhood,jibbeninterface(i,j,k))
-                  
                   ! Match Jibben parbolic reconstruction to volume fraction
                   call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  if (.not.isParaboloid(jibbeninterface(i,j,k))) then
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle
+                  end if
+                  call getParaboloid(jibbeninterface(i,j,k),paraboloid_data)
+                  cell_center=0.5_WP*[this%cfg%x(i)+this%cfg%x(i+1), &
+                     this%cfg%y(j)+this%cfg%y(j+1),this%cfg%z(k)+this%cfg%z(k+1)]
+                  distance_to_datum=sqrt(sum((paraboloid_data(1:3)-cell_center)**2))
+                  if (.not.all(ieee_is_finite(paraboloid_data)).or. &
+                     .not.ieee_is_finite(distance_to_datum).or. &
+                     distance_to_datum.gt.datum_limit*this%cfg%meshsize(i,j,k)) then
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle ! retain PLIC in the PU stencil
+                  end if
                   call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
+                  call getNormMoments(cell,jibbeninterface(i,j,k),vfrac)
+                  vfrac=vfrac/this%cfg%vol(i,j,k)
+                  if (.not.ieee_is_finite(vfrac).or.abs(vfrac-this%VF(i,j,k)).gt.volume_tolerance) then
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle
+                  end if
 
                   ! storing in pu reconstruction is curvature checks are met
                   principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
@@ -4662,7 +4692,10 @@ contains
                   do jj=j-1,j+1
                      do ii=i-1,i+1
                         ! Add cell to neighborhood
-                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.2) then
+                           area_weight=abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))
+                           if (.not.ieee_is_finite(area_weight)) cycle
+                           if (area_weight.le.epsilon(1.0_WP)) cycle
                            centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
                            area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/(this%cfg%meshsize(i,j,k)**2)
                            vfrac_weight = 1.0_WP
@@ -4689,15 +4722,13 @@ contains
                      end do
                   end do
                end do
+               if (.not.found_center.or.ind.lt.2) then
+                  is_underresolved(i,j,k)=.true.
+                  call emptyNeighborhood(pu_neighborhood)
+                  cycle ! retain PLIC
+               end if
                if (ind.gt.0.and.found_center) then
                   delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
-
-                  ! neighbor count check
-                  if (ind.lt.2) then
-                     is_underresolved(i,j,k)=.true.
-                     call emptyNeighborhood(pu_neighborhood)
-                     cycle ! use plic
-                  end if
 
                   ! supercell check
                   if (this%VF(i,j,k).lt.0.01_WP.and.vf_supercell.lt.0.1_WP) then
@@ -4716,7 +4747,12 @@ contains
                      cycle
                   end if
                   call getParaboloid(puinterface(i,j,k),paraboloid_data)
-                  if (.not.all(ieee_is_finite(paraboloid_data(1:3)))) then
+                  cell_center=0.5_WP*[this%cfg%x(i)+this%cfg%x(i+1), &
+                     this%cfg%y(j)+this%cfg%y(j+1),this%cfg%z(k)+this%cfg%z(k+1)]
+                  distance_to_datum=sqrt(sum((paraboloid_data(1:3)-cell_center)**2))
+                  if (.not.all(ieee_is_finite(paraboloid_data)).or. &
+                     .not.ieee_is_finite(distance_to_datum).or. &
+                     distance_to_datum.gt.datum_limit*this%cfg%meshsize(i,j,k)) then
                      call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
                      call emptyNeighborhood(pu_neighborhood)
                      cycle
@@ -4724,7 +4760,8 @@ contains
 
                   ! checking curvature
                   principal_curvatures = getPrincipalCurvatures(puinterface(i,j,k))
-                  if (abs(principal_curvatures(1)).gt.(8.0_WP/this%cfg%meshsize(i,j,k)).or.&
+                  if (.not.all(ieee_is_finite(principal_curvatures)).or. &
+                     abs(principal_curvatures(1)).gt.(8.0_WP/this%cfg%meshsize(i,j,k)).or.&
                      abs(principal_curvatures(2)).gt.(8.0_WP/this%cfg%meshsize(i,j,k))) then
                      call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
                      call emptyNeighborhood(pu_neighborhood)
@@ -4738,8 +4775,9 @@ contains
                   ! If volume matching did not work, replace by plane
                   call getNormMoments(cell,puinterface(i,j,k),vfrac)
                   vfrac = vfrac/this%cfg%vol(i,j,k)
-                  if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
+                  if (.not.ieee_is_finite(vfrac).or.abs(vfrac-this%VF(i,j,k)).gt.volume_tolerance) then
                      call copy(puinterface(i,j,k), this%liquid_gas_interface(i,j,k))
+                     call emptyNeighborhood(pu_neighborhood)
                      cycle
                   end if
 
@@ -4772,6 +4810,7 @@ contains
       integer(IRL_SignedIndex_t) :: i,j,k
       integer :: ind,ii,jj,kk,icenter,aligned_count
       integer, parameter :: min_aligned_neighbors=6
+      real(IRL_double), parameter :: datum_limit=2.0_WP, volume_tolerance=1.0e-14_WP
       type(JibbenNeigh_type) :: jibben_neighborhood
       type(PUNeigh_RectCub_type) :: pu_neighborhood
       type(RectCub_type) :: cell
@@ -4781,7 +4820,8 @@ contains
       integer(IRL_LargeOffsetIndex_t) :: total_cells
       logical, dimension(:,:,:), allocatable :: is_underresolved
       real(IRL_DOUBLE), dimension(2) :: principal_curvatures
-      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac
+      real(IRL_double) :: delta, area_weight, vfrac_weight, vfrac, distance_to_datum
+      real(IRL_double), dimension(3) :: cell_center
       real(IRL_double) :: vf_supercell, normal_metric, squaredVolError
       real(IRL_double) :: fitted_alignment, cos_neighbor_angle, cos_fitted_angle, normal_weight
       real(IRL_double), dimension(3) :: normal, centroid, center_normal, averaged_normal
@@ -4838,7 +4878,10 @@ contains
                   call setPlane(this%liquid_gas_interface(i,j,k),0,[0.0_WP,0.0_WP,0.0_WP],sign(1.0_WP,this%VF(i,j,k)-0.5_WP))
                   cycle
                end if
-               if (getNumberOfVertices(this%interface_polygon(1,i,j,k)).le.2) cycle
+               if (getNumberOfVertices(this%interface_polygon(1,i,j,k)).le.2) then
+                  is_underresolved(i,j,k)=.true.
+                  cycle
+               end if
 
                ! Filling up jibben neighborhood
                call setSize(jibben_neighborhood, 0)
@@ -4851,7 +4894,10 @@ contains
                   do jj=j-1,j+1
                      do ii=i-1,i+1
                         ! Add cell to neighborhood
-                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.2) then
+                           area_weight=abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))
+                           if (.not.ieee_is_finite(area_weight)) cycle
+                           if (area_weight.le.epsilon(1.0_WP)) cycle
                            normal=calculateNormal(this%interface_polygon(1,ii,jj,kk))
                            if (dot_product(normal,center_normal).ge.cos_neighbor_angle) &
                               aligned_count=aligned_count+1
@@ -4876,23 +4922,23 @@ contains
                      end do
                   end do
                end do
+               if (.not.found_center.or.ind.lt.2) then
+                  is_underresolved(i,j,k)=.true.
+                  call emptyNeighborhood(jibben_neighborhood)
+                  cycle ! retain PLIC
+               end if
                if (ind.gt.0.and.found_center) then
                   ! Localize jibben neighborhood
                   call setDelta(jibben_neighborhood, 2.5_WP*this%cfg%meshsize(i,j,k))
                   call localize(jibben_neighborhood)
 
-                  ! neighbor count check
-                  if (ind.lt.2) then
-                     is_underresolved(i,j,k)=.true.
-                     call emptyNeighborhood(jibben_neighborhood)
-                     cycle ! use plic
-                  end if
+                  call reconstructJibbenSq3D(jibben_neighborhood,jibbeninterface(i,j,k))
 
                   well_resolved=.false.
                   if (aligned_count.ge.min_aligned_neighbors) then
                      averaged_normal=globalAveragedNormalWithJibben3D(jibben_neighborhood)
                      fitted_alignment=dot_product(averaged_normal,center_normal)
-                     if (fitted_alignment.eq.fitted_alignment.and. &
+                     if (ieee_is_finite(fitted_alignment).and. &
                         fitted_alignment.ge.cos_fitted_angle) well_resolved=.true.
                   end if
 
@@ -4914,7 +4960,7 @@ contains
 
                      ! checking normal scatter metric
                      normal_metric = reconstructionMetricWithJibben3D(jibben_neighborhood)
-                     if (normal_metric.gt.0.10_WP) then
+                     if (.not.ieee_is_finite(normal_metric).or.normal_metric.gt.0.10_WP) then
                         is_underresolved(i,j,k)=.true.
                         call emptyNeighborhood(jibben_neighborhood)
                         cycle ! use plic
@@ -4922,19 +4968,36 @@ contains
 
                      ! squared volume error
                      squaredVolError = volumeErrorSquaredWithJibben3D(jibben_neighborhood, this%cfg%meshsize(i,j,k))
-                     if (squaredVolError.gt.0.05_WP) then
+                     if (.not.ieee_is_finite(squaredVolError).or.squaredVolError.gt.0.05_WP) then
                         is_underresolved(i,j,k)=.true.
                         call emptyNeighborhood(jibben_neighborhood)
                         cycle ! use plic
                      end if
                   end if
    
-                  ! Jibben squared volume reconstruction
-                  call reconstructJibbenSq3D(jibben_neighborhood,jibbeninterface(i,j,k))
-                  
                   ! Match Jibben parbolic reconstruction to volume fraction
                   call construct_2pt(cell,[this%cfg%x(i),this%cfg%y(j),this%cfg%z(k)],[this%cfg%x(i+1),this%cfg%y(j+1),this%cfg%z(k+1)])
+                  if (.not.isParaboloid(jibbeninterface(i,j,k))) then
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle
+                  end if
+                  call getParaboloid(jibbeninterface(i,j,k),paraboloid_data)
+                  cell_center=0.5_WP*[this%cfg%x(i)+this%cfg%x(i+1), &
+                     this%cfg%y(j)+this%cfg%y(j+1),this%cfg%z(k)+this%cfg%z(k+1)]
+                  distance_to_datum=sqrt(sum((paraboloid_data(1:3)-cell_center)**2))
+                  if (.not.all(ieee_is_finite(paraboloid_data)).or. &
+                     .not.ieee_is_finite(distance_to_datum).or. &
+                     distance_to_datum.gt.datum_limit*this%cfg%meshsize(i,j,k)) then
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle ! retain PLIC in the PU stencil
+                  end if
                   call matchVolumeFraction(cell,this%VF(i,j,k),jibbeninterface(i,j,k))
+                  call getNormMoments(cell,jibbeninterface(i,j,k),vfrac)
+                  vfrac=vfrac/this%cfg%vol(i,j,k)
+                  if (.not.ieee_is_finite(vfrac).or.abs(vfrac-this%VF(i,j,k)).gt.volume_tolerance) then
+                     call emptyNeighborhood(jibben_neighborhood)
+                     cycle
+                  end if
 
                   ! storing in pu reconstruction is curvature checks are met
                   principal_curvatures = getPrincipalCurvatures(jibbeninterface(i,j,k))
@@ -4997,7 +5060,10 @@ contains
                   do jj=j-1,j+1
                      do ii=i-1,i+1
                         ! Add cell to neighborhood
-                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.0) then
+                        if (getNumberOfVertices(this%interface_polygon(1,ii,jj,kk)).gt.2) then
+                           area_weight=abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))
+                           if (.not.ieee_is_finite(area_weight)) cycle
+                           if (area_weight.le.epsilon(1.0_WP)) cycle
                            centroid     = calculateCentroid(this%interface_polygon(1,ii,jj,kk))
                            area_weight  = abs(calculateVolume(this%interface_polygon(1,ii,jj,kk)))/(this%cfg%meshsize(i,j,k)**2)
                            vfrac_weight = 1.0_WP
@@ -5024,15 +5090,13 @@ contains
                      end do
                   end do
                end do
+               if (.not.found_center.or.ind.lt.2) then
+                  is_underresolved(i,j,k)=.true.
+                  call emptyNeighborhood(pu_neighborhood)
+                  cycle ! retain PLIC
+               end if
                if (ind.gt.0.and.found_center) then
                   delta    =  2.5_WP*this%cfg%meshsize(i,j,k)
-
-                  ! neighbor count check
-                  if (ind.lt.2) then
-                     is_underresolved(i,j,k)=.true.
-                     call emptyNeighborhood(pu_neighborhood)
-                     cycle ! use plic
-                  end if
 
                   ! supercell check
                   if (this%VF(i,j,k).lt.0.01_WP.and.vf_supercell.lt.0.1_WP) then
@@ -5051,7 +5115,12 @@ contains
                      cycle
                   end if
                   call getParaboloid(puinterface(i,j,k),paraboloid_data)
-                  if (.not.all(ieee_is_finite(paraboloid_data(1:3)))) then
+                  cell_center=0.5_WP*[this%cfg%x(i)+this%cfg%x(i+1), &
+                     this%cfg%y(j)+this%cfg%y(j+1),this%cfg%z(k)+this%cfg%z(k+1)]
+                  distance_to_datum=sqrt(sum((paraboloid_data(1:3)-cell_center)**2))
+                  if (.not.all(ieee_is_finite(paraboloid_data)).or. &
+                     .not.ieee_is_finite(distance_to_datum).or. &
+                     distance_to_datum.gt.datum_limit*this%cfg%meshsize(i,j,k)) then
                      call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k))
                      call emptyNeighborhood(pu_neighborhood)
                      cycle
@@ -5059,7 +5128,8 @@ contains
 
                   ! checking curvature
                   principal_curvatures = getPrincipalCurvatures(puinterface(i,j,k))
-                  if (abs(principal_curvatures(1)).gt.(8.0_WP/this%cfg%meshsize(i,j,k)).or.&
+                  if (.not.all(ieee_is_finite(principal_curvatures)).or. &
+                     abs(principal_curvatures(1)).gt.(8.0_WP/this%cfg%meshsize(i,j,k)).or.&
                      abs(principal_curvatures(2)).gt.(8.0_WP/this%cfg%meshsize(i,j,k))) then
                      call copy(puinterface(i,j,k),this%liquid_gas_interface(i,j,k)) ! replace by plane
                      call emptyNeighborhood(pu_neighborhood)
@@ -5073,8 +5143,9 @@ contains
                   ! If volume matching did not work, replace by plane
                   call getNormMoments(cell,puinterface(i,j,k),vfrac)
                   vfrac = vfrac/this%cfg%vol(i,j,k)
-                  if (abs(vfrac-this%VF(i,j,k)) > VFlo) then
+                  if (.not.ieee_is_finite(vfrac).or.abs(vfrac-this%VF(i,j,k)).gt.volume_tolerance) then
                      call copy(puinterface(i,j,k), this%liquid_gas_interface(i,j,k))
+                     call emptyNeighborhood(pu_neighborhood)
                      cycle
                   end if
 
