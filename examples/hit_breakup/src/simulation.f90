@@ -6,7 +6,7 @@ module simulation
    use tpns_class,        only: tpns
    use vfs_class,         only: vfs
    use timetracker_class, only: timetracker
-   use ensight_class,     only: ensight
+   use vtk_class,         only: vtk
    use surfmesh_class,    only: surfmesh
    use stracker_class,    only: stracker
    use event_class,       only: event
@@ -24,9 +24,9 @@ module simulation
    !> Include structure tracker
    type(stracker) :: strack
  
-   !> Ensight postprocessing
-   type(ensight)  :: ens_out
-   type(event)    :: ens_evt,inj_evt,drop_evt
+   !> VTK postprocessing
+   type(vtk)      :: vtk_out
+   type(event)    :: vtk_evt,inj_evt,drop_evt
    type(surfmesh) :: smesh
   
    !> Simulation monitor file
@@ -240,7 +240,7 @@ contains
       
       ! Initialize our VOF solver
       create_vof: block
-         use vfs_class, only: lvira,elvira,plicnet,remap_storage
+         use vfs_class, only: lvira,elvira,plicnet,remap_storage,PUppic_hf,PUppic
          ! Create a VOF solver with stored full-cell Lagrangian remap
          call vf%initialize(cfg=cfg,reconstruction_method=plicnet,transport_method=remap_storage,name='VOF')
          ! Initialize droplet parameters
@@ -388,24 +388,25 @@ contains
          end do
       end block create_smesh
       
-      ! Add Ensight output
-      create_ensight: block
-         ! Create Ensight output from cfg
-         ens_out=ensight(cfg=cfg,name='HIT')
-         ! Create event for Ensight output
-         ens_evt=event(time=time,name='Ensight output')
-         call param_read('Ensight output period',ens_evt%tper)
+      ! Add VTK output
+      create_vtk: block
+         ! Create VTK output from cfg
+         vtk_out=vtk(cfg=cfg,name='HIT')
+         ! Create event for VTK output. Keep the existing input parameter name
+         ! for consistency with the other VTK-based multiphase examples.
+         vtk_evt=event(time=time,name='VTK output')
+         call param_read('Ensight output period',vtk_evt%tper)
          ! Add variables to output
-         call ens_out%add_vector('velocity',Ui,Vi,Wi)
-         call ens_out%add_scalar('divergence',fs%div)
-         call ens_out%add_scalar('pressure',fs%P)
-         call ens_out%add_scalar('VOF',vf%VF)
-         call ens_out%add_scalar('curvature',vf%curv)
-         call ens_out%add_scalar('id',strack%id)
-         call ens_out%add_surface('vofplic',smesh)
-         ! Output to ensight
-         if (ens_evt%occurs()) call ens_out%write_data(time%t)
-      end block create_ensight
+         call vtk_out%add_vector('velocity',Ui,Vi,Wi)
+         call vtk_out%add_scalar('divergence',fs%div)
+         call vtk_out%add_scalar('pressure',fs%P)
+         call vtk_out%add_scalar('VOF',vf%VF)
+         call vtk_out%add_scalar('curvature',vf%curv)
+         call vtk_out%add_scalar('id',strack%id)
+         call vtk_out%add_surface('vofplic',smesh)
+         ! Output to VTK
+         if (vtk_evt%occurs()) call vtk_out%write_data(time%t)
+      end block create_vtk
       
       ! Create a monitor file
       create_monitor: block
@@ -602,8 +603,8 @@ contains
          call fs%interp_vel(Ui,Vi,Wi)
          call fs%get_div()
          
-         ! Output to ensight
-         if (ens_evt%occurs()) then
+         ! Output to VTK
+         if (vtk_evt%occurs()) then
             ! Update surfmesh object
             update_smesh: block
                use irl_fortran_interface
@@ -625,7 +626,7 @@ contains
                   end do
                end do
             end block update_smesh
-            call ens_out%write_data(time%t)
+            call vtk_out%write_data(time%t)
          end if
          
          ! Analyse droplets
@@ -742,7 +743,7 @@ contains
       
       ! Get rid of all objects - need destructors
       ! monitor
-      ! ensight
+      ! vtk
       ! bcond
       ! timetracker
       
