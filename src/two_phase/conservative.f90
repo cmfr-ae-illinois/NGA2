@@ -2618,7 +2618,9 @@ subroutine updateSurfaceTensionStresses3DFaceParaboloids(this)
                     SELECT CASE(this%ParaboloidOption)
                     CASE(1)
                         ! print *,"PRE NORMAL"
-                        call HF3D_LVIRA_Normal(VF_Stencil,i_in,j_in,i_in*j_in,normal)
+                        if(this%NormalOption .eq. 2) then 
+                            call HF3D_LVIRA_Normal(VF_Stencil,i_in,j_in,i_in*j_in,normal)
+                        endif
                         ! print *,"POST NORMAL",normal
                         ! Localize Jibben neighborhood
                         call setDelta(jibben_neighborhood, 2.5_WP*this%vf%cfg%meshsize(i,j,k))
