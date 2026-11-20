@@ -30,6 +30,7 @@ module amrist_class
         ! Options
         real(WP), dimension(3) :: MarangoniOption
         integer :: SurfaceTensionOption,CurvatureOption,SmoothingOption,LevelsetOption
+        integer :: NormalOption,MatchingOption
         logical :: TwoD
         real(WP) :: PressureOption
         real(WP) :: PU_spread
@@ -66,7 +67,7 @@ module amrist_class
         procedure, private :: add_integral_surface_tension ! Done
         procedure, private :: add_integral_surface_tension_pressure
         procedure, private :: add_csf_shift_integral_surface_tension_jump 
-
+        procedure, private :: add_paraboloid_surface_tension
         ! Integral Surface Tension Methods
         procedure, private :: update_surface_tension_stresses !Done 
         procedure, private :: update_surface_tension_forces ! Done
@@ -316,6 +317,8 @@ contains
                 call this%add_csf_shift_integral_surface_tension_jump(scale)
             case (4)
                 call this%add_integral_surface_tension_pressure(scale)
+            case(5) 
+                call this%add_paraboloid_surface_tension(scale)
             CASE DEFAULT
                 call this%fsvf%add_surface_tension(scale)
         END SELECT
@@ -496,6 +499,63 @@ contains
         deallocate(STFx,STFy,STFz)
         ! print *, "END add_integral_surface_tension"
     end subroutine add_integral_surface_tension
+
+    subroutine add_paraboloid_surface_tension(this,scale)
+        use amrex_amr_module, only: amrex_multifab
+        use amrex_interface, only: amrmfab_average_down_face
+        implicit none
+        class(amrist), intent(inout) :: this
+        real(WP), intent(in) :: scale 
+
+        type(amrex_multifab),dimension(:), allocatable :: STFx,STFy,STFz
+        type(amrex_mfiter) :: mfi 
+        type(amrex_box) :: bx
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        real(WP) :: dxi,dyi,dzi,VF_f,mysurf,mycurv
+        integer :: lvl,i,j,k
+        
+        ! print *, "START add_integral_surface_tension"
+        ! Guard: no surface tension or clvl<maxlvl
+        if (this%fsvf%sigma.eq.0.0_WP.or.this%fsvf%amr%clvl().lt.this%fsvf%amr%maxlvl) return
+        ! Build temp face flux mfabs
+        allocate(STFx(0:this%fsvf%amr%clvl()),STFy(0:this%fsvf%amr%clvl()),STFz(0:this%fsvf%amr%clvl()))
+        do lvl=0,this%fsvf%amr%clvl()
+            call this%fsvf%amr%mfab_build(lvl,STFx(lvl),ncomp=1,nover=1,atface=[.true., .false.,.false.]); call STFx(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFy(lvl),ncomp=1,nover=1,atface=[.false.,.true., .false.]); call STFy(lvl)%setval(0.0_WP)
+            call this%fsvf%amr%mfab_build(lvl,STFz(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.true. ]); call STFz(lvl)%setval(0.0_WP)
+        end do
+
+        ! Here we make the forces
+        call this%update_surface_tension_forces_paraboloid(STFx,STFy,STFz)
+        
+        ! Smoothing
+        ! select case (this%SmoothingOption)
+        !     case (1)
+        !         ! No smoothing
+        !     case (2)
+        !         ! print *, "Laplacian Smoothing"
+        !         call this%apply_laplacian_smoothing(STFx,STFy,STFz)
+        !     case default
+        !         ! No smoothing
+        ! end select
+
+        ! Average down face fluxes from finest to coarser levels
+        do lvl=this%fsvf%amr%clvl()-1,0,-1
+            call amrmfab_average_down_face(fmf=STFx(lvl+1),cmf=STFx(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+            call amrmfab_average_down_face(fmf=STFy(lvl+1),cmf=STFy(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+            call amrmfab_average_down_face(fmf=STFz(lvl+1),cmf=STFz(lvl),rr=[this%fsvf%amr%rrefx(lvl),this%fsvf%amr%rrefy(lvl),this%fsvf%amr%rrefz(lvl)],cgeom=this%fsvf%amr%geom(lvl))
+        end do
+        ! Apply fluxes
+        call this%fsvf%apply_face_fluxes(scale,STFx,STFy,STFz)
+        ! Destroy temps
+        do lvl=0,this%fsvf%amr%clvl()
+            call this%fsvf%amr%mfab_destroy(STFx(lvl))
+            call this%fsvf%amr%mfab_destroy(STFy(lvl))
+            call this%fsvf%amr%mfab_destroy(STFz(lvl))
+        end do
+        deallocate(STFx,STFy,STFz)
+        ! print *, "END add_integral_surface_tension"
+    end subroutine add_paraboloid_surface_tension
 
     subroutine add_integral_surface_tension_pressure(this,scale)
         use amrex_amr_module, only: amrex_multifab
@@ -747,7 +807,7 @@ contains
                         P3 = face_center + shift
 
                         ! Now that we have the face corners, run the code and get the force
-                        ! if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+                        ! if(this%fsvf%VF(i,j,k) .gt. 1e-12 .and. this%fsvf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
                         ! print *, "Marangoni Option:",this%MarangoniOption
                         
                         call solveFace(solver,this%fsvf%sigma,P0,P1,P2,P3,this%PU_spread*dx,this%PressureOption,this%MarangoniOption,force)
@@ -1224,23 +1284,28 @@ contains
         ! Jibben Stuff
         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
         integer :: ind, ii,jj,kk, icenter
-        integer, dimension(1:3) :: lower,upper 
+        integer, dimension(1:3) :: lower,upper,size_stencil
         real(WP), dimension(1:3) :: datum, normal, quarter_size
         real(WP), dimension(3) :: lo,hi
         real(WP) :: vf_sample,count,normal_mag,liquid_in_cell,cell_volume_total,vf_cell
         type(pic_container), dimension(:,:,:,:), contiguous, pointer :: pPIC
         type(pic_container) :: interface_component 
         type(SeparatorVariant_type) :: interface_component_variant
-        type(JibbenNeigh_type) :: neighborhood
+        type(JibbenNeigh_type) :: jibben_neighborhood
         type(RectCub_type) :: cell
         type(PlanarSep_type) :: planar_sep
         type(Poly_type) :: polygon
-        logical :: found_center
+        logical :: found_interface
         real(WP) :: cell_volume
         real(WP) :: liquid_volume
         real(WP) :: gas_volume
         real(WP) :: liquid_fraction
-        real(WP) :: gas_fraction
+        real(WP) :: gas_fraction,weight
+        ! HF Paraboloid Stuff
+        real(WP), dimension(-3:3,-3:3,-3:3) :: VF_Stencil
+        real(WP), dimension(1:3) :: stencil_center 
+        integer :: Nx,Ny,Nz,status
+
         ! print *, "START update_surface_tension_stresses"
         lvl = this%fsvf%amr%maxlvl 
         dx = this%fsvf%amr%dx(lvl)
@@ -1266,9 +1331,9 @@ contains
             pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
             pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
             ! Get pointer to PLIC data
-            pVF=>this%VF%mf(lvl)%dataptr(mfi)
-            pPLIC=>this%PLIC%dataptr(mfi)
-            pPIC=>this%PIC%dataptr(mfi)
+            pVF=>this%fsvf%VF%mf(lvl)%dataptr(mfi)
+            pPLIC=>this%fsvf%PLIC%dataptr(mfi)
+            pPIC=>this%fsvf%PIC%dataptr(mfi)
 
             bx = mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
@@ -1343,7 +1408,7 @@ contains
                         ! Jibben Stuff
                         call setSize(jibben_neighborhood,0)
                         ind = 0 
-                        found_center = .false. 
+                        found_interface = .false. 
                         ! Add Polygons to neighbhorhood
                         lower = (/i-1, j-1, k-1/)
                         upper = (/i+1, j+1, k+1/)
@@ -1351,22 +1416,31 @@ contains
                             lower(i_in) = lower(i_in) - 1
                             upper(j_in) = upper(j_in) + 1
                         endif
-                        do kk=lower(3),uper(3); do jj = lower(2),upper(2); do ii = lower(1),upper(1)
+                        do kk=lower(3),upper(3); do jj = lower(2),upper(2); do ii = lower(1),upper(1)
                             ! Skip cells with no interface
                             if(is_full(pPLIC(ii,jj,kk,:)) .or. is_empty(pPLIC(ii,jj,kk,:))) cycle 
                             ! add polygon to neighborhood
                             call setNumberOfPlanes(planar_sep,1)
                             call setPlane(planar_sep,0,pPLIC(ii,jj,kk,1:3),pPLIC(ii,jj,kk,4))
-                            lo=[this%fsvf%amr%xlo+real(ii  ,WP)*dx,this%fsvf%amr%ylo+real(jj  ,WP)*dy,thisfsvf%%amr%zlo+real(kk  ,WP)*dz]
-                            hi=[this%fsvf%amr%xlo+real(ii+1,WP)*dx,this%fsvf%amr%ylo+real(jj+1,WP)*dy,thisfsvf%%amr%zlo+real(kk+1,WP)*dz]
+                            lo=[this%fsvf%amr%xlo+real(ii  ,WP)*dx,this%fsvf%amr%ylo+real(jj  ,WP)*dy,this%fsvf%amr%zlo+real(kk  ,WP)*dz]
+                            hi=[this%fsvf%amr%xlo+real(ii+1,WP)*dx,this%fsvf%amr%ylo+real(jj+1,WP)*dy,this%fsvf%amr%zlo+real(kk+1,WP)*dz]
                             call construct_2pt(cell,lo,hi)
                             call getPoly(cell, planar_sep,0,polygon)
                             if (getNumberOfVertices(polygon).ge.3) then
-                                call addMember(neighborhood,polygon,1.0_WP)
+                                vf_sample = pVF(ii,jj,kk,1)
+                                ! VF Weight
+                                weight = 1.0_WP 
+                                if(vf_sample .lt. 0.1_WP) then 
+                                    weight = SIN(5.0_WP*Pi*vf_sample)**2
+                                endif 
+                                if(vf_sample .gt. 0.9_WP) then 
+                                    weight = SIN(5.0_WP*Pi*(1.0_WP-vf_sample))**2
+                                endif 
+                                call addMember(jibben_neighborhood,polygon,weight)
                                 ! Trap and set stencil center
                                 if (ii.eq.i.and.jj.eq.j.and.kk.eq.k) then
                                     icenter=ind
-                                    found_center=.true.
+                                    found_interface=.true.
                                     call setCenterOfStencil(neighborhood,icenter)
                                 end if
                                 ! Increment counter
@@ -1385,16 +1459,16 @@ contains
                         ! Create a cell centered at the face Center
                         if(i_in .eq. j_in) then 
                             index =(/i,j,k/)
-                            vf_sample = pVF(i,j,k,1)
+                            vf_sample = pVF(index(1),index(2),index(3),1)
                             vf_cell = vf_sample 
                             if(vf_sample .gt. 1e-12 .and. vf_sample .lt. 1.0_WP - 1e-12) then 
-                                normal = pPLIC(i,j,k,1:3)
+                                normal = pPLIC(index(1),index(2),index(3),1:3)
                                 found_interface = .true. 
                             endif
                         else
                             ! ========================== First Pressure Cell
                             index = (/i,j,k/)
-                            vf_sample = pVF(index(1),index(2),index(3))
+                            vf_sample = pVF(index(1),index(2),index(3),1)
                             ! Construct quarter cell
                             ! Shift to quarter cell center
                             shift = 0.0_WP
@@ -1429,7 +1503,7 @@ contains
                             ! ========================== Second Pressure Cell
                             index = (/i,j,k/)
                             index = index+shift_index_normal
-                            vf_sample = this%VF%vf(index(1),index(2),index(3))
+                            vf_sample = pVF(index(1),index(2),index(3),1)
                             ! Construct quarter cell
                             ! Shift to quarter cell center
                             shift = 0.0_WP
@@ -1464,7 +1538,7 @@ contains
                             ! ========================== Third Pressure Cell
                             index = (/i,j,k/)
                             index = index + shift_index_normal - shift_index_momentum 
-                            vf_sample = this%VF%vf(index(1),index(2),index(3))
+                            vf_sample = pVF(index(1),index(2),index(3),1)
                             ! Construct quarter cell
                             ! Shift to quarter cell center
                             shift = 0.0_WP
@@ -1499,7 +1573,7 @@ contains
                             ! ========================== Fourth Pressure Cell
                             index = (/i,j,k/)
                             index = index - shift_index_momentum 
-                            vf_sample = this%VF%vf(index(1),index(2),index(3))
+                            vf_sample = pVF(index(1),index(2),index(3),1)
                             ! Construct quarter cell
                             ! Shift to quarter cell center
                             shift = 0.0_WP
@@ -1550,15 +1624,43 @@ contains
                         else
                             normal = (/0.0_WP,0.0_WP,0.0_WP/)
                         endif
-
+                        if(this%NormalOption .eq. 2) then 
+                            ! Use Height Function Normal
+                            ! Update Upper and lower for the proper stencils 
+                            lower = (/-3,-3,-3/)
+                            upper = (/3,3,3/)
+                            size_stencil = (/7,7,7/)
+                            if(i_in .ne. j_in) then 
+                                ! In the momentum direction, we take one off the top
+                                size_stencil(i_in) = size_stencil(i_in)-1
+                                ! In the Normal direction, take one off the bottom 
+                                size_stencil(j_in) = size_stencil(j_in)-1
+                            endif
+                            ! Get VF
+                            do kk=lower(3),upper(3)
+                            do jj=lower(2),upper(2)
+                            do ii=lower(1),upper(1)
+                                VF_Stencil(ii,jj,kk) = pVF(i+ii,j+jj,k+kk,1)
+                            enddo
+                            enddo
+                            enddo
+                            ! Remake Paraboloid
+                            Nx = size_stencil(1)
+                            Ny = size_stencil(2)
+                            Nz = size_stencil(3)
+                        endif
                         ! Build Jibben Interface
                         force = (/0.0_WP,0.0_WP,0.0_WP/)
                         if (found_interface) then 
+                            ! HF Normal
+                            if(this%NormalOption.eq. 2) then 
+                                call HF3D_LVIRA_Normal(VF_Stencil,i_in,j_in,i_in*j_in,normal)
+                            endif
                             ! Localize Jibben Neighborhood
                             call setDelta(jibben_neighborhood,2.5_WP*(dx+dy+dz)/3.0_WP)
                             call localize(jibben_neighborhood,datum,normal)
 
-                            call reconstructJibben3D(neighborhood,interface_component)
+                            call reconstructJibben3D(jibben_neighborhood,interface_component_variant)
                             ! Make cell
                             call construct_2pt(cell, &
                                 face_center - 0.5_WP*dvec, &
@@ -1570,12 +1672,12 @@ contains
                                 CASE DEFAULT
                                     ! print *,"NOT MATCHING"
                             END SELECT
-                            call new(interface_component_variant,interface_component)
+                            ! call new(interface_component_variant,interface_component)
                             call emptyNeighborhood(jibben_neighborhood)
-                            call solveFaceParaboloid(solver,this%fs%sigma,P0,P1,P2,P3, interface_component,this%PressureOption,this%MarangoniOption,force)
+                            call solveFaceParaboloid(solver,this%fsvf%sigma,P0,P1,P2,P3, interface_component_variant,this%PressureOption,this%MarangoniOption,force)
                         endif
                         ! Now that we have the face corners, run the code and get the force
-                        ! if(this%vf%VF(i,j,k) .gt. 1e-12 .and. this%vf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
+                        ! if(this%fsvf%VF(i,j,k) .gt. 1e-12 .and. this%fsvf%VF(i,j,k) .lt. 1.0_WP - 1e-12) then 
                         ! print *, "Marangoni Option:",this%MarangoniOption
                         
                         
@@ -1616,6 +1718,122 @@ contains
         call this%ST_z_stresses%sync_lvl(lvl)
         ! print *, "OUT MFI LOOP"
     end subroutine update_surface_tension_stresses_paraboloid 
+
+    subroutine update_surface_tension_forces_paraboloid(this,STFx,STFy,STFz)
+        use amrex_amr_module, only: amrex_multifab
+        use amrex_interface, only: amrmfab_average_down_face
+        implicit none 
+        class(amrist), intent(inout) :: this
+        type(amrex_multifab),dimension(:), allocatable, intent(inout) :: STFx,STFy,STFz
+        type(amrex_box) :: bx
+        type(amrex_mfiter) :: mfi
+        integer :: lvl,i,j,k
+        real(WP) :: dxi,dyi,dzi,x,y,z,dx,dy,dz
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSigma_x,pSigma_y,pSigma_z
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx_viz,pSTFy_viz,pSTFz_viz
+
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx_viz_CSF,pSTFy_viz_CSF,pSTFz_viz_CSF
+        real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pSubVF,pCurv,pSD
+        real(WP) :: VF_f,mysurf,mycurv
+        ! print *, "START update_surface_tension_forces"
+        call this%update_surface_tension_stresses()
+        ! Here we are going to compute the CSF Force for comparision
+        lvl = this%fsvf%amr%maxlvl 
+        dxi=1.0_WP/this%fsvf%amr%dx(lvl); dyi=1.0_WP/this%fsvf%amr%dy(lvl); dzi=1.0_WP/this%fsvf%amr%dz(lvl)
+        dx = this%fsvf%amr%dx(lvl)
+        dy = this%fsvf%amr%dy(lvl)
+        dz = this%fsvf%amr%dz(lvl)
+        ! print *, "DXI = ", dxi,dyi,dzi
+        call this%fsvf%amr%mfiter_build(lvl,mfi)
+        do while (mfi%next())
+            pSTFx =>STFx(lvl)%dataptr(mfi)
+            pSTFy =>STFy(lvl)%dataptr(mfi)
+            pSTFz =>STFz(lvl)%dataptr(mfi)
+
+            pSTFx_viz =>this%ST_x_force%mf(lvl)%dataptr(mfi)
+            pSTFy_viz =>this%ST_y_force%mf(lvl)%dataptr(mfi)
+            pSTFz_viz =>this%ST_z_force%mf(lvl)%dataptr(mfi)
+
+            pSTFx_viz_CSF =>this%CSF_x_force%mf(lvl)%dataptr(mfi)
+            pSTFy_viz_CSF =>this%CSF_y_force%mf(lvl)%dataptr(mfi)
+            pSTFz_viz_CSF =>this%CSF_z_force%mf(lvl)%dataptr(mfi)
+
+            pSigma_x => this%ST_x_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_y => this%ST_y_stresses%mf(lvl)%dataptr(mfi)
+            pSigma_z => this%ST_z_stresses%mf(lvl)%dataptr(mfi)
+
+            pVF   =>this%fsvf%VF%mf(lvl)%dataptr(mfi)
+            pSubVF=>this%fsvf%subVF%dataptr(mfi)
+            pCurv =>this%fsvf%curv%dataptr(mfi)
+            pSD   =>this%fsvf%SD%dataptr(mfi)
+            ! stresses are stored at cell centers
+            ! X Faces
+            bx=mfi%nodaltilebox(1) 
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                pSTFx(i,j,k,1)= (pSigma_x(i,j,k,1)-pSigma_x(i-1,j,k,1)) * dxi*dyi*dzi+ &
+                                (pSigma_x(i,j,k,2)-pSigma_x(i,j-1,k,2)) * dxi*dyi*dzi
+                if(.not. this%TwoD) then 
+                    pSTFx(i,j,k,1) = pSTFx(i,j,k,1) + &
+                                (pSigma_x(i,j,k,3)-pSigma_x(i,j,k-1,3)) * dxi*dyi*dzi
+                endif
+                VF_f=0.5_WP*(pSubVF(i-1,j,k,2)+pSubVF(i,j,k,1))
+                pSTFx(i,j,k,1) = pSTFx(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+                pSTFx_viz(i,j,k,1) = pSTFx(i,j,k,1)
+
+                ! CSF
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i-1:i,j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i-1:i,j,k,1)*pCurv(i-1:i,j,k,1))/mysurf
+                pSTFx_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i-1,j,k,1))*dxi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+
+            end do; end do; end do
+
+            ! Y Faces
+            bx=mfi%nodaltilebox(2) 
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                pSTFy(i,j,k,1)= (pSigma_y(i,j,k,1)-pSigma_y(i-1,j,k,1)) * dxi*dyi*dzi + &
+                                (pSigma_y(i,j,k,2)-pSigma_y(i,j-1,k,2)) * dxi*dyi*dzi
+                if(.not. this%TwoD) then 
+                    pSTFy(i,j,k,1) = pSTFy(i,j,k,1) + &
+                                (pSigma_y(i,j,k,3)-pSigma_y(i,j,k-1,3)) * dxi*dyi*dzi
+                endif
+                VF_f=0.5_WP*(pSubVF(i,j-1,k,4)+pSubVF(i,j,k,3))
+                pSTFy(i,j,k,1) = pSTFy(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+                pSTFy_viz(i,j,k,1) = pSTFy(i,j,k,1)
+
+                ! CSF
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i,j-1:j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j-1:j,k,1)*pCurv(i,j-1:j,k,1))/mysurf
+                pSTFy_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j-1,k,1))*dyi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+            end do; end do; end do
+
+            ! Z Faces
+            bx=mfi%nodaltilebox(3) 
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                pSTFz(i,j,k,1)= 0.0_WP
+                if(.not. this%TwoD) then 
+                    pSTFz(i,j,k,1)= (pSigma_z(i,j,k,1)-pSigma_z(i-1,j,k,1)) * dxi*dyi*dzi + &
+                                    (pSigma_z(i,j,k,2)-pSigma_z(i,j-1,k,2)) * dxi*dyi*dzi + &
+                                    (pSigma_z(i,j,k,3)-pSigma_z(i,j,k-1,3)) * dxi*dyi*dzi
+                endif
+                VF_f=0.5_WP*(pSubVF(i,j,k-1,6)+pSubVF(i,j,k,5))
+                pSTFz(i,j,k,1) = pSTFz(i,j,k,1)/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+                pSTFz_viz(i,j,k,1) = pSTFz(i,j,k,1)
+
+                mycurv=0.0_WP
+                mysurf=sum(pSD(i,j,k-1:k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j,k-1:k,1)*pCurv(i,j,k-1:k,1))/mysurf
+                pSTFz_viz_CSF(i,j,k,1)=this%fsvf%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j,k-1,1))*dzi/(this%fsvf%rhoL*VF_f+this%fsvf%rhoG*(1.0_WP-VF_f))
+            end do; end do; end do
+        enddo 
+
+        ! Fill same-level ghost cells, including periodic boundaries
+        call STFx(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFy(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+        call STFz(lvl)%fill_boundary(this%fsvf%amr%geom(lvl))
+
+        call this%fsvf%amr%mfiter_destroy(mfi)  
+        ! print *, "END update_surface_tension_forces"       
+    end subroutine update_surface_tension_forces_paraboloid
 
     ! ============================================================================
     ! ELLIPSOID METHODS
